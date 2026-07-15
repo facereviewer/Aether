@@ -14,6 +14,7 @@ pub struct Cli {
     pub wg_no_profile_retry: bool,
     pub verbose: bool,
     pub gui: bool,
+    pub tun: bool,
 }
 
 impl Cli {
@@ -33,6 +34,7 @@ impl Cli {
             wg_no_profile_retry: false,
             verbose: false,
             gui: false,
+            tun: false,
         };
 
         let mut i = 0;
@@ -91,6 +93,9 @@ impl Cli {
                 "--gui" => {
                     cli.gui = true;
                 }
+                "--tun" => {
+                    cli.tun = true;
+                }
                 other => {
                     eprintln!("error: unknown flag '{other}'");
                     eprintln!("run 'aether --help' for usage");
@@ -126,6 +131,7 @@ OPTIONS:
         --wg-no-profile-retry   Don't retry with fallback aethernoize profiles
     -v, --verbose               Enable debug logging (RUST_LOG=debug)
         --gui                   Launch the GUI instead of CLI
+        --tun                   Use TUN device instead of SOCKS5 (requires root)
     -h, --help                  Print help
 
 ENVIRONMENT VARIABLES (flags take precedence):

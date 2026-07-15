@@ -17,6 +17,7 @@ pub struct Preset {
     pub wg_keepalive: u16,
     pub wg_no_profile_retry: bool,
     pub verbose: bool,
+    pub tun_mode: bool,
 }
 
 impl Default for Preset {
@@ -35,6 +36,7 @@ impl Default for Preset {
             wg_keepalive: 5,
             wg_no_profile_retry: false,
             verbose: false,
+            tun_mode: false,
         }
     }
 }
@@ -71,6 +73,7 @@ impl PresetStore {
                 wg_keepalive: 5,
                 wg_no_profile_retry: false,
                 verbose: false,
+                tun_mode: false,
             },
             Preset {
                 name: "Fast WireGuard".to_string(),
@@ -86,6 +89,7 @@ impl PresetStore {
                 wg_keepalive: 5,
                 wg_no_profile_retry: false,
                 verbose: false,
+                tun_mode: false,
             },
             Preset {
                 name: "Stealth MASQUE".to_string(),
@@ -101,6 +105,7 @@ impl PresetStore {
                 wg_keepalive: 5,
                 wg_no_profile_retry: false,
                 verbose: false,
+                tun_mode: false,
             },
             Preset {
                 name: "WARP-in-WARP".to_string(),
@@ -116,6 +121,7 @@ impl PresetStore {
                 wg_keepalive: 5,
                 wg_no_profile_retry: false,
                 verbose: false,
+                tun_mode: false,
             },
         ]
     }

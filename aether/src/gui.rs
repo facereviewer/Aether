@@ -1,4 +1,5 @@
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use eframe::egui;
 
@@ -7,9 +8,9 @@ use crate::preset::{Preset, PresetStore};
 pub fn run(_cli: crate::cli::Cli) {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([700.0, 550.0])
-            .with_min_inner_size([500.0, 400.0])
-            .with_title(format!("Aether v{}", env!("CARGO_PKG_VERSION"))),
+            .with_inner_size([820.0, 620.0])
+            .with_min_inner_size([600.0, 450.0])
+            .with_title("Aether"),
         ..Default::default()
     };
 
@@ -24,6 +25,7 @@ pub fn run(_cli: crate::cli::Cli) {
         logs: Vec::new(),
         log_rx: None,
         shutdown_tx: None,
+        connected_since: None,
         show_new_preset_dialog: false,
         new_preset_name: String::new(),
         show_delete_confirm: false,
@@ -31,18 +33,16 @@ pub fn run(_cli: crate::cli::Cli) {
     };
 
     eframe::run_native(
-        &format!("Aether v{}", env!("CARGO_PKG_VERSION")),
+        "Aether",
         options,
         Box::new(|cc| {
-            setup_custom_fonts(&cc.egui_ctx);
+            let mut style = (*cc.egui_ctx.style()).clone();
+            style.spacing.item_spacing = egui::vec2(8.0, 6.0);
+            cc.egui_ctx.set_style(style);
             Ok(Box::new(app))
         }),
     )
     .ok();
-}
-
-fn setup_custom_fonts(_ctx: &egui::Context) {
-    // Use default fonts for now
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -62,6 +62,7 @@ struct AetherGui {
     logs: Vec<String>,
     log_rx: Option<Arc<Mutex<Vec<String>>>>,
     shutdown_tx: Option<std::sync::mpsc::Sender<()>>,
+    connected_since: Option<Instant>,
     show_new_preset_dialog: bool,
     new_preset_name: String,
     show_delete_confirm: bool,
@@ -81,244 +82,310 @@ impl eframe::App for AetherGui {
             }
         }
 
+        // Top status bar
+        self.render_top_bar(ctx);
+
         // Left panel: presets
-        egui::SidePanel::left("presets_panel").show(ctx, |ui| {
-            ui.heading("Presets");
-            ui.separator();
-
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                let preset_names: Vec<String> =
-                    self.preset_store.presets.iter().map(|p| p.name.clone()).collect();
-                for name in &preset_names {
-                    let is_selected = self.selected_preset_name == *name;
-                    let is_active = self.preset_store.active.as_deref() == Some(name.as_str());
-
-                    let label = if is_active {
-                        format!("{} *", name)
-                    } else {
-                        name.clone()
-                    };
-
-                    if ui.selectable_label(is_selected, &label).clicked() {
-                        self.selected_preset_name = name.clone();
-                        if let Some(preset) = self.preset_store.presets.iter().find(|p| p.name == *name) {
-                            self.editing = preset.clone();
-                        }
-                    }
-                }
+        egui::SidePanel::left("presets")
+            .resizable(true)
+            .default_width(180.0)
+            .min_width(150.0)
+            .show(ctx, |ui| {
+                self.render_presets_panel(ui);
             });
 
-            ui.add_space(8.0);
-            ui.separator();
+        // Central panel
+        egui::CentralPanel::default().show(ctx, |ui| {
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                self.render_config(ui);
+            });
+        });
 
+        // Dialogs
+        self.render_dialogs(ctx);
+    }
+}
+
+impl AetherGui {
+    fn render_top_bar(&mut self, ctx: &egui::Context) {
+        egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
+            ui.add_space(4.0);
             ui.horizontal(|ui| {
-                if ui.button("+ New").clicked() {
+                // App title
+                ui.heading("Aether");
+                ui.separator();
+
+                // Status indicator
+                let (status_text, status_color) = match &self.status {
+                    Status::Idle => ("Ready".into(), egui::Color32::GRAY),
+                    Status::Connecting => ("Connecting...".into(), egui::Color32::from_rgb(220, 180, 50)),
+                    Status::Connected => {
+                        let elapsed = self.connected_since
+                            .map(|t| t.elapsed().as_secs())
+                            .unwrap_or(0);
+                        let mins = elapsed / 60;
+                        let secs = elapsed % 60;
+                        (format!("Connected ({:02}:{:02})", mins, secs), egui::Color32::from_rgb(60, 200, 60))
+                    }
+                    Status::Disconnecting => ("Disconnecting...".into(), egui::Color32::from_rgb(220, 150, 50)),
+                    Status::Error(e) => (format!("Error: {}", e), egui::Color32::from_rgb(220, 60, 60)),
+                };
+
+                ui.label(egui::RichText::new(&status_text).color(status_color).strong());
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // Connect/Disconnect button
+                    let btn_text = match &self.status {
+                        Status::Connected | Status::Connecting => "Disconnect",
+                        Status::Disconnecting => "Disconnecting...",
+                        _ => "Connect",
+                    };
+                    let btn_color = match &self.status {
+                        Status::Connected | Status::Connecting => egui::Color32::from_rgb(180, 50, 50),
+                        _ => egui::Color32::from_rgb(50, 160, 50),
+                    };
+
+                    let btn = ui.add(
+                        egui::Button::new(
+                            egui::RichText::new(btn_text).color(egui::Color32::WHITE).strong()
+                        ).fill(btn_color).min_size(egui::vec2(100.0, 28.0))
+                    );
+
+                    if btn.clicked() {
+                        match &self.status {
+                            Status::Idle | Status::Error(_) => self.connect(),
+                            Status::Connected | Status::Connecting => self.disconnect(),
+                            _ => {}
+                        }
+                    }
+                });
+            });
+            ui.add_space(4.0);
+        });
+    }
+
+    fn render_presets_panel(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.strong("Presets");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.small_button("+").on_hover_text("New preset").clicked() {
                     self.show_new_preset_dialog = true;
                     self.new_preset_name.clear();
                 }
-                if ui.button("Save").clicked() {
-                    if let Some(p) = self.preset_store.presets.iter_mut().find(|p| p.name == self.selected_preset_name) {
-                        *p = self.editing.clone();
-                        let _ = self.preset_store.save();
+            });
+        });
+        ui.separator();
+
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            let preset_names: Vec<String> = self.preset_store.presets.iter().map(|p| p.name.clone()).collect();
+            for name in &preset_names {
+                let is_selected = self.selected_preset_name == *name;
+                let response = ui.selectable_label(is_selected, name.as_str());
+
+                if response.clicked() {
+                    self.selected_preset_name = name.clone();
+                    if let Some(preset) = self.preset_store.presets.iter().find(|p| p.name == *name) {
+                        self.editing = preset.clone();
                     }
                 }
-                if ui.button("Delete").clicked() {
-                    if !self.is_builtin(&self.selected_preset_name) {
-                        self.show_delete_confirm = true;
-                        self.delete_target = self.selected_preset_name.clone();
+
+                // Right-click context menu for delete
+                response.context_menu(|ui| {
+                    if !self.is_builtin(name) {
+                        if ui.button("Delete").clicked() {
+                            self.show_delete_confirm = true;
+                            self.delete_target = name.clone();
+                            ui.close_menu();
+                        }
+                    } else {
+                        ui.label("Built-in preset");
                     }
-                }
+                });
+            }
+        });
+
+        ui.separator();
+        ui.small("Right-click to delete custom presets");
+    }
+
+    fn render_config(&mut self, ui: &mut egui::Ui) {
+        // === Connection ===
+        ui.group(|ui| {
+            ui.strong("Connection");
+            ui.horizontal(|ui| {
+                ui.label("Protocol:");
+                egui::ComboBox::from_id_salt("protocol")
+                    .width(140.0)
+                    .selected_text(&self.editing.protocol)
+                    .show_ui(ui, |ui| {
+                        for (val, desc) in &[("masq", "MASQUE (HTTP/3)"), ("wg", "WireGuard"), ("gool", "WARP-in-WARP")] {
+                            ui.selectable_value(&mut self.editing.protocol, val.to_string(), *desc);
+                        }
+                    });
+
+                ui.separator();
+
+                ui.label("Output:");
+                egui::ComboBox::from_id_salt("output_mode")
+                    .width(140.0)
+                    .selected_text(if self.editing.tun_mode { "TUN (system-wide)" } else { "SOCKS5 (local proxy)" })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.editing.tun_mode, false, "SOCKS5 (local proxy)");
+                        ui.selectable_value(&mut self.editing.tun_mode, true, "TUN (system-wide)");
+                    });
+            });
+
+            if self.editing.tun_mode {
+                ui.colored_label(egui::Color32::from_rgb(200, 180, 50), "TUN mode requires root privileges. Routes all system traffic through the tunnel.");
+            } else {
+                ui.horizontal(|ui| {
+                    ui.label("Bind:");
+                    ui.add(egui::TextEdit::singleline(&mut self.editing.bind).desired_width(180.0));
+                });
+            }
+        });
+
+        ui.add_space(6.0);
+
+        // === Scanning ===
+        ui.group(|ui| {
+            ui.strong("Endpoint Discovery");
+            ui.horizontal(|ui| {
+                ui.label("Scan mode:");
+                egui::ComboBox::from_id_salt("scan")
+                    .width(140.0)
+                    .selected_text(&self.editing.scan_mode)
+                    .show_ui(ui, |ui| {
+                        for (val, desc) in &[
+                            ("turbo", "Turbo (fast, first hit)"),
+                            ("balanced", "Balanced (default)"),
+                            ("thorough", "Thorough (deep, best ping)"),
+                            ("stealth", "Stealth (quiet, patient)"),
+                        ] {
+                            ui.selectable_value(&mut self.editing.scan_mode, val.to_string(), *desc);
+                        }
+                    });
+
+                ui.separator();
+
+                ui.label("IP version:");
+                egui::ComboBox::from_id_salt("ip")
+                    .width(100.0)
+                    .selected_text(&self.editing.ip_version)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.editing.ip_version, "v4".to_string(), "IPv4");
+                        ui.selectable_value(&mut self.editing.ip_version, "v6".to_string(), "IPv6");
+                        ui.selectable_value(&mut self.editing.ip_version, "both".to_string(), "Both");
+                    });
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("Force peer:");
+                ui.add(egui::TextEdit::singleline(&mut self.editing.peer).desired_width(200.0).hint_text("auto-detect if empty"));
             });
         });
 
-        // Central panel: config + status + logs
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("Configuration");
-            ui.separator();
+        ui.add_space(6.0);
 
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                // Protocol
-                ui.horizontal(|ui| {
-                    ui.label("Protocol:");
-                    egui::ComboBox::from_id_salt("protocol")
-                        .selected_text(&self.editing.protocol)
-                        .show_ui(ui, |ui| {
-                            for opt in &["masq", "wg", "gool"] {
-                                ui.selectable_value(&mut self.editing.protocol, opt.to_string(), *opt);
-                            }
-                        });
-                });
-
-                // Bind
-                ui.horizontal(|ui| {
-                    ui.label("Bind:");
-                    ui.text_edit_singleline(&mut self.editing.bind);
-                });
-
-                // Scan mode
-                ui.horizontal(|ui| {
-                    ui.label("Scan:");
-                    egui::ComboBox::from_id_salt("scan")
-                        .selected_text(&self.editing.scan_mode)
-                        .show_ui(ui, |ui| {
-                            for opt in &["turbo", "balanced", "thorough", "stealth"] {
-                                ui.selectable_value(&mut self.editing.scan_mode, opt.to_string(), *opt);
-                            }
-                        });
-                });
-
-                // IP version
-                ui.horizontal(|ui| {
-                    ui.label("IP version:");
-                    egui::ComboBox::from_id_salt("ip")
-                        .selected_text(&self.editing.ip_version)
-                        .show_ui(ui, |ui| {
-                            for opt in &["v4", "v6", "both"] {
-                                ui.selectable_value(&mut self.editing.ip_version, opt.to_string(), *opt);
-                            }
-                        });
-                });
-
-                ui.separator();
-
-                // MASQUE obfuscation
-                ui.horizontal(|ui| {
-                    ui.label("MASQUE Obsc:");
-                    egui::ComboBox::from_id_salt("noize")
-                        .selected_text(&self.editing.masque_obfuscation)
-                        .show_ui(ui, |ui| {
-                            for opt in &["off", "gfw", "firewall"] {
-                                ui.selectable_value(&mut self.editing.masque_obfuscation, opt.to_string(), *opt);
-                            }
-                        });
-                });
-
-                // WG obfuscation
-                ui.horizontal(|ui| {
-                    ui.label("WG Obsc:");
-                    egui::ComboBox::from_id_salt("aethernoize")
-                        .selected_text(&self.editing.wg_obfuscation)
-                        .show_ui(ui, |ui| {
-                            for opt in &["off", "light", "balanced", "aggressive"] {
-                                ui.selectable_value(&mut self.editing.wg_obfuscation, opt.to_string(), *opt);
-                            }
-                        });
-                });
-
-                // ECH
-                ui.horizontal(|ui| {
-                    ui.label("ECH:");
-                    egui::ComboBox::from_id_salt("ech")
-                        .selected_text(&self.editing.ech)
-                        .show_ui(ui, |ui| {
-                            for opt in &["off", "auto"] {
-                                ui.selectable_value(&mut self.editing.ech, opt.to_string(), *opt);
-                            }
-                        });
-                });
-
-                // Peer
-                ui.horizontal(|ui| {
-                    ui.label("Peer:");
-                    ui.text_edit_singleline(&mut self.editing.peer);
-                    if ui.small_button("Clear").clicked() {
-                        self.editing.peer.clear();
-                    }
-                });
-
-                ui.separator();
-
-                // WG keepalive
-                ui.horizontal(|ui| {
-                    ui.label("WG Keepalive:");
-                    ui.add(egui::DragValue::new(&mut self.editing.wg_keepalive).speed(1).range(0..=120));
-                    ui.label("s");
-                });
-
-                // Config path
-                ui.horizontal(|ui| {
-                    ui.label("Config:");
-                    ui.text_edit_singleline(&mut self.editing.config_path);
-                });
-
-                // Checkboxes
-                ui.horizontal(|ui| {
-                    ui.checkbox(&mut self.editing.wg_no_profile_retry, "No profile retry");
-                    ui.checkbox(&mut self.editing.verbose, "Verbose");
-                });
-            });
-
-            ui.separator();
-
-            // Status + Connect/Disconnect
+        // === Security ===
+        ui.group(|ui| {
+            ui.strong("Security & Obfuscation");
             ui.horizontal(|ui| {
-                let status_text = match &self.status {
-                    Status::Idle => "Idle".to_string(),
-                    Status::Connecting => "Connecting...".to_string(),
-                    Status::Connected => "Connected".to_string(),
-                    Status::Disconnecting => "Disconnecting...".to_string(),
-                    Status::Error(e) => format!("Error: {}", e),
-                };
-                let status_color = match &self.status {
-                    Status::Connected => egui::Color32::from_rgb(80, 200, 80),
-                    Status::Error(_) => egui::Color32::from_rgb(200, 80, 80),
-                    Status::Idle => egui::Color32::GRAY,
-                    _ => egui::Color32::from_rgb(200, 180, 80),
-                };
+                ui.label("MASQUE obsc:");
+                egui::ComboBox::from_id_salt("noize")
+                    .width(120.0)
+                    .selected_text(&self.editing.masque_obfuscation)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.editing.masque_obfuscation, "off".to_string(), "Off");
+                        ui.selectable_value(&mut self.editing.masque_obfuscation, "firewall".to_string(), "Firewall");
+                        ui.selectable_value(&mut self.editing.masque_obfuscation, "gfw".to_string(), "GFW");
+                    });
 
-                match &self.status {
-                    Status::Idle | Status::Error(_) => {
-                        if ui.button("Connect").clicked() {
-                            self.connect();
-                        }
-                    }
-                    Status::Connected | Status::Connecting => {
-                        if ui.button("Disconnect").clicked() {
-                            self.disconnect();
-                        }
-                    }
-                    Status::Disconnecting => {
-                        ui.button("Disconnecting...").clicked();
-                    }
-                }
+                ui.separator();
 
-                ui.label(egui::RichText::new(status_text).color(status_color));
+                ui.label("WG obsc:");
+                egui::ComboBox::from_id_salt("aethernoize")
+                    .width(120.0)
+                    .selected_text(&self.editing.wg_obfuscation)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.editing.wg_obfuscation, "off".to_string(), "Off");
+                        ui.selectable_value(&mut self.editing.wg_obfuscation, "light".to_string(), "Light");
+                        ui.selectable_value(&mut self.editing.wg_obfuscation, "balanced".to_string(), "Balanced");
+                        ui.selectable_value(&mut self.editing.wg_obfuscation, "aggressive".to_string(), "Aggressive");
+                    });
             });
 
-            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label("ECH:");
+                egui::ComboBox::from_id_salt("ech")
+                    .width(120.0)
+                    .selected_text(&self.editing.ech)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.editing.ech, "off".to_string(), "Off");
+                        ui.selectable_value(&mut self.editing.ech, "auto".to_string(), "Auto");
+                    });
 
-            // Log area
-            ui.label("Log:");
-            egui::ScrollArea::vertical()
-                .max_height(150.0)
-                .stick_to_bottom(true)
-                .show(ui, |ui| {
+                ui.separator();
+
+                ui.label("WG keepalive:");
+                ui.add(egui::DragValue::new(&mut self.editing.wg_keepalive).speed(1).range(0..=120));
+                ui.label("s");
+            });
+        });
+
+        ui.add_space(6.0);
+
+        // === Advanced ===
+        ui.collapsing("Advanced", |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Config file:");
+                ui.add(egui::TextEdit::singleline(&mut self.editing.config_path).desired_width(250.0));
+            });
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut self.editing.wg_no_profile_retry, "No WG profile retry on failure");
+                ui.separator();
+                ui.checkbox(&mut self.editing.verbose, "Verbose logging");
+            });
+        });
+
+        ui.add_space(8.0);
+
+        // === Log ===
+        ui.separator();
+        ui.strong("Log");
+        egui::ScrollArea::vertical()
+            .max_height(140.0)
+            .stick_to_bottom(true)
+            .show(ui, |ui| {
+                if self.logs.is_empty() {
+                    ui.label(egui::RichText::new("No activity yet.").italics().weak());
+                } else {
                     for line in &self.logs {
                         ui.label(egui::RichText::new(line).monospace().small());
                     }
-                });
-        });
+                }
+            });
+    }
 
-        // New preset dialog
+    fn render_dialogs(&mut self, ctx: &egui::Context) {
         if self.show_new_preset_dialog {
             egui::Window::new("New Preset")
                 .collapsible(false)
                 .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label("Name:");
                         ui.text_edit_singleline(&mut self.new_preset_name);
                     });
                     ui.horizontal(|ui| {
-                        if ui.button("Create").clicked() {
-                            if !self.new_preset_name.is_empty() {
-                                let mut preset = self.editing.clone();
-                                preset.name = self.new_preset_name.clone();
-                                self.preset_store.presets.push(preset);
-                                self.selected_preset_name = self.new_preset_name.clone();
-                                let _ = self.preset_store.save();
-                                self.show_new_preset_dialog = false;
-                            }
+                        if ui.button("Create").clicked() && !self.new_preset_name.is_empty() {
+                            let mut preset = self.editing.clone();
+                            preset.name = self.new_preset_name.clone();
+                            self.preset_store.presets.push(preset);
+                            self.selected_preset_name = self.new_preset_name.clone();
+                            let _ = self.preset_store.save();
+                            self.show_new_preset_dialog = false;
                         }
                         if ui.button("Cancel").clicked() {
                             self.show_new_preset_dialog = false;
@@ -327,11 +394,11 @@ impl eframe::App for AetherGui {
                 });
         }
 
-        // Delete confirmation dialog
         if self.show_delete_confirm {
             egui::Window::new("Delete Preset")
                 .collapsible(false)
                 .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
                     ui.label(format!("Delete preset '{}'?", self.delete_target));
                     ui.horizontal(|ui| {
@@ -349,15 +416,14 @@ impl eframe::App for AetherGui {
                 });
         }
     }
-}
 
-impl AetherGui {
     fn is_builtin(&self, name: &str) -> bool {
         PresetStore::built_in().iter().any(|p| p.name == name)
     }
 
     fn connect(&mut self) {
         self.status = Status::Connecting;
+        self.connected_since = Some(Instant::now());
         self.logs.clear();
         self.logs.push("[GUI] Starting tunnel...".to_string());
 
@@ -382,6 +448,7 @@ impl AetherGui {
             let _ = tx.send(());
         }
         self.status = Status::Idle;
+        self.connected_since = None;
         self.logs.push("[GUI] Disconnected.".to_string());
     }
 }
@@ -401,7 +468,11 @@ async fn run_tunnel_from_preset(
 
     push_log(&logs, &format!("[GUI] Protocol: {}", preset.protocol));
     push_log(&logs, &format!("[GUI] Scan: {}", preset.scan_mode));
-    push_log(&logs, &format!("[GUI] Binding to {}", preset.bind));
+    if preset.tun_mode {
+        push_log(&logs, "[GUI] Mode: TUN (system-wide)");
+    } else {
+        push_log(&logs, &format!("[GUI] Mode: SOCKS5 on {}", preset.bind));
+    }
 
     let listen: std::net::SocketAddr = match preset.bind.parse() {
         Ok(addr) => addr,
@@ -426,6 +497,7 @@ async fn run_tunnel_from_preset(
         wg_no_profile_retry: preset.wg_no_profile_retry,
         verbose: preset.verbose,
         gui: false,
+        tun: preset.tun_mode,
     };
 
     let protocol = crate::Protocol::parse(&preset.protocol);

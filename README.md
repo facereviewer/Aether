@@ -90,10 +90,11 @@ Launch the graphical interface with the `--gui` flag:
 ```
 
 The GUI provides:
-- All configuration options in a visual interface
+- All configuration options in an organized, intuitive interface
+- **SOCKS5** or **TUN** output mode (system-wide routing)
 - Built-in presets (Default MASQUE, Fast WireGuard, Stealth MASQUE, WARP-in-WARP)
 - Custom preset management (create, save, delete)
-- Connection status and log display
+- Real-time connection status and log display
 - One-click connect/disconnect
 
 ```bash
@@ -119,6 +120,7 @@ Priority chain: **CLI flags** > **environment variables** > **interactive prompt
 | `--wg-no-profile-retry` | | Don't retry with fallback obfuscation profiles | |
 | `--verbose` | `-v` | Debug logging | |
 | `--gui` | | Launch the graphical interface | |
+| `--tun` | | Use TUN device instead of SOCKS5 (requires root) | |
 | `--help` | `-h` | Print help | |
 
 #### Examples
@@ -135,6 +137,9 @@ Priority chain: **CLI flags** > **environment variables** > **interactive prompt
 
 # Force a specific config and ECH auto-detection
 ./aether -c /etc/aether/prod.toml --ech auto
+
+# TUN mode (system-wide routing, requires root)
+sudo ./aether --tun --mode masq --scan turbo
 ```
 
 After startup, a SOCKS5 proxy is available at the bind address:
