@@ -81,9 +81,20 @@ Run without arguments to get interactive prompts:
 ./aether
 ```
 
-### CLI flags
+### GUI mode
 
-Skip prompts entirely by passing flags:
+Launch the graphical interface with the `--gui` flag:
+
+```bash
+./aether --gui
+```
+
+The GUI provides:
+- All configuration options in a visual interface
+- Built-in presets (Default MASQUE, Fast WireGuard, Stealth MASQUE, WARP-in-WARP)
+- Custom preset management (create, save, delete)
+- Connection status and log display
+- One-click connect/disconnect
 
 ```bash
 ./aether --bind 0.0.0.0:9011 --mode masq --scan turbo
@@ -107,6 +118,7 @@ Priority chain: **CLI flags** > **environment variables** > **interactive prompt
 | `--wg-keepalive` | | WG persistent keepalive seconds | `5` |
 | `--wg-no-profile-retry` | | Don't retry with fallback obfuscation profiles | |
 | `--verbose` | `-v` | Debug logging | |
+| `--gui` | | Launch the graphical interface | |
 | `--help` | `-h` | Print help | |
 
 #### Examples

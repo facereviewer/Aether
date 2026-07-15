@@ -13,6 +13,7 @@ pub struct Cli {
     pub wg_keepalive: Option<u16>,
     pub wg_no_profile_retry: bool,
     pub verbose: bool,
+    pub gui: bool,
 }
 
 impl Cli {
@@ -31,6 +32,7 @@ impl Cli {
             wg_keepalive: None,
             wg_no_profile_retry: false,
             verbose: false,
+            gui: false,
         };
 
         let mut i = 0;
@@ -86,6 +88,9 @@ impl Cli {
                 "--wg-no-profile-retry" => {
                     cli.wg_no_profile_retry = true;
                 }
+                "--gui" => {
+                    cli.gui = true;
+                }
                 other => {
                     eprintln!("error: unknown flag '{other}'");
                     eprintln!("run 'aether --help' for usage");
@@ -120,6 +125,7 @@ OPTIONS:
         --wg-keepalive <SECS>   WireGuard persistent keepalive [default: 5]
         --wg-no-profile-retry   Don't retry with fallback aethernoize profiles
     -v, --verbose               Enable debug logging (RUST_LOG=debug)
+        --gui                   Launch the GUI instead of CLI
     -h, --help                  Print help
 
 ENVIRONMENT VARIABLES (flags take precedence):

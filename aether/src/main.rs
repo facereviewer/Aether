@@ -5,10 +5,12 @@ mod config;
 mod consts;
 mod dns;
 mod error;
+mod gui;
 mod masque;
 mod masque_h2;
 mod netstack;
 mod noize;
+mod preset;
 mod prober;
 mod quic;
 mod socks;
@@ -28,6 +30,12 @@ const DEFAULT_CONFIG: &str = "aether.toml";
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli_args = cli::Cli::parse();
+
+    // Launch GUI if --gui flag is set
+    if cli_args.gui {
+        gui::run(cli_args);
+        return Ok(());
+    }
 
     let log_level = if cli_args.verbose {
         "debug"
@@ -134,21 +142,21 @@ fn aethernoize_config(cli: &cli::Cli) -> aethernoize::AetherNoizeConfig {
     aethernoize::from_profile(&profile)
 }
 
-fn warp_config_path(base: &str) -> String {
+pub fn warp_config_path(base: &str) -> String {
     if let Ok(p) = std::env::var("AETHER_WG_CONFIG") {
         return p;
     }
     base.to_string()
 }
 
-fn masque_config_path(base: &str) -> String {
+pub fn masque_config_path(base: &str) -> String {
     if let Ok(p) = std::env::var("AETHER_MASQUE_CONFIG") {
         return p;
     }
     derive_sibling_path(base, "masque")
 }
 
-fn derive_sibling_path(base: &str, suffix: &str) -> String {
+pub fn derive_sibling_path(base: &str, suffix: &str) -> String {
     let dir_end = base.rfind(|c| c == '/' || c == '\\').map(|i| i + 1).unwrap_or(0);
     match base[dir_end..].rfind('.') {
         Some(rel) => {
@@ -159,7 +167,7 @@ fn derive_sibling_path(base: &str, suffix: &str) -> String {
     }
 }
 
-async fn load_or_provision_warp(config_path: &str) -> Result<account::Identity> {
+pub async fn load_or_provision_warp(config_path: &str) -> Result<account::Identity> {
     if let Some(identity) = config::load(config_path)? {
         log::info!("[+] loaded existing warp identity from {config_path}");
         return Ok(identity);
@@ -172,7 +180,7 @@ async fn load_or_provision_warp(config_path: &str) -> Result<account::Identity> 
     Ok(identity)
 }
 
-async fn load_or_provision_masque(config_path: &str) -> Result<account::Identity> {
+pub async fn load_or_provision_masque(config_path: &str) -> Result<account::Identity> {
     if let Some(identity) = config::load(config_path)? {
         log::info!("[+] loaded existing masque identity from {config_path}");
         if identity.has_masque_credentials() {
@@ -194,7 +202,7 @@ async fn load_or_provision_masque(config_path: &str) -> Result<account::Identity
     Ok(identity)
 }
 
-async fn select_peer(
+pub async fn select_peer(
     identity: &account::Identity,
     protocol: Protocol,
     cli: &cli::Cli,
@@ -268,7 +276,7 @@ async fn select_peer(
     }
 }
 
-async fn resolve_ech(cli: &cli::Cli) -> Option<Vec<u8>> {
+pub async fn resolve_ech(cli: &cli::Cli) -> Option<Vec<u8>> {
     let ech_val = cli
         .ech
         .clone()
@@ -304,7 +312,7 @@ async fn resolve_ech(cli: &cli::Cli) -> Option<Vec<u8>> {
     }
 }
 
-async fn run_masque_tunnel(
+pub async fn run_masque_tunnel(
     identity: account::Identity,
     peer: SocketAddr,
     ech: Option<Vec<u8>>,
@@ -445,7 +453,7 @@ async fn hunt_wg_peer_with_profile(
     Ok(SocketAddr::new(best.ip, best.port))
 }
 
-async fn run_wireguard(
+pub async fn run_wireguard(
     identity: account::Identity,
     listen: SocketAddr,
     cli: &cli::Cli,
@@ -699,7 +707,7 @@ async fn spawn_udp_forwarder(
     Ok(local)
 }
 
-async fn run_warp_in_warp(
+pub async fn run_warp_in_warp(
     primary: account::Identity,
     secondary: account::Identity,
     peer: SocketAddr,
@@ -826,14 +834,14 @@ async fn select_protocol_interactive() -> Protocol {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Protocol {
+pub enum Protocol {
     Masque,
     WireGuard,
     WarpInWarp,
 }
 
 impl Protocol {
-    fn parse(s: &str) -> Protocol {
+    pub fn parse(s: &str) -> Protocol {
         match s.trim().to_lowercase().as_str() {
             "wg" | "wireguard" => Protocol::WireGuard,
             "gool" | "wiw" | "warp-in-warp" | "warpinwarp" => Protocol::WarpInWarp,
@@ -841,7 +849,7 @@ impl Protocol {
         }
     }
 
-    fn label(&self) -> &'static str {
+    pub fn label(&self) -> &'static str {
         match self {
             Protocol::Masque => "MASQUE",
             Protocol::WireGuard => "WireGuard",
