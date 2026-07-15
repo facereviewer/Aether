@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 mod account;
+mod cli;
 mod config;
 mod consts;
 mod dns;
@@ -26,27 +27,35 @@ const DEFAULT_CONFIG: &str = "aether.toml";
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+    let cli_args = cli::Cli::parse();
+
+    let log_level = if cli_args.verbose {
+        "debug"
+    } else {
+        "info"
+    };
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(log_level))
         .format_timestamp_millis()
         .init();
 
     install_netstack_panic_guard();
 
-    let listen: SocketAddr = std::env::var("AETHER_SOCKS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or_else(|| "127.0.0.1:1819".parse().unwrap());
-
-    let base_config = std::env::var("AETHER_CONFIG").unwrap_or_else(|_| DEFAULT_CONFIG.to_string());
-
-    let protocol = if std::env::var("AETHER_PEER").is_ok() || std::env::var("AETHER_WG_PEER").is_ok() {
-        match std::env::var("AETHER_PROTOCOL") {
-            Ok(v) => Protocol::parse(&v),
-            Err(_) => Protocol::Masque,
-        }
-    } else {
-        select_protocol().await
+    let listen: SocketAddr = {
+        let bind_str = cli_args
+            .bind
+            .clone()
+            .or_else(|| std::env::var("AETHER_SOCKS").ok())
+            .unwrap_or_else(|| "127.0.0.1:1819".to_string());
+        bind_str.parse().map_err(|_| AetherError::Other("bad --bind address".into()))?
     };
+
+    let base_config = cli_args
+        .config
+        .clone()
+        .or_else(|| std::env::var("AETHER_CONFIG").ok())
+        .unwrap_or_else(|| DEFAULT_CONFIG.to_string());
+
+    let protocol = resolve_protocol(&cli_args).await;
 
     match protocol {
         Protocol::Masque => {
@@ -58,10 +67,10 @@ async fn main() -> Result<()> {
                 identity.ipv4,
                 identity.ipv6
             );
-            let peer = select_peer(&identity, protocol).await?;
+            let peer = select_peer(&identity, protocol, &cli_args).await?;
             log::info!("[+] using cloudflare edge {peer}");
-            let ech = resolve_ech().await;
-            run_masque_tunnel(identity, peer, ech, listen).await
+            let ech = resolve_ech(&cli_args).await;
+            run_masque_tunnel(identity, peer, ech, listen, &cli_args).await
         }
         Protocol::WireGuard => {
             let config_path = warp_config_path(&base_config);
@@ -72,7 +81,7 @@ async fn main() -> Result<()> {
                 identity.ipv4,
                 identity.ipv6
             );
-            run_wireguard(identity, listen).await
+            run_wireguard(identity, listen, &cli_args).await
         }
         Protocol::WarpInWarp => {
             let primary_path = warp_config_path(&base_config);
@@ -83,9 +92,9 @@ async fn main() -> Result<()> {
                 "[+] outer device={} ipv4={} | inner device={} ipv4={}",
                 primary.device_id, primary.ipv4, secondary.device_id, secondary.ipv4
             );
-            let peer = select_peer(&primary, Protocol::WireGuard).await?;
+            let peer = select_peer(&primary, Protocol::WireGuard, &cli_args).await?;
             log::info!("[+] using cloudflare edge {peer} (outer)");
-            run_warp_in_warp(primary, secondary, peer, listen).await
+            run_warp_in_warp(primary, secondary, peer, listen, &cli_args).await
         }
     }
 }
@@ -105,14 +114,22 @@ fn install_netstack_panic_guard() {
     }));
 }
 
-fn noize_config() -> noize::NoizeConfig {
-    let profile = std::env::var("AETHER_NOIZE").unwrap_or_else(|_| "firewall".to_string());
+fn noize_config(cli: &cli::Cli) -> noize::NoizeConfig {
+    let profile = cli
+        .noize
+        .clone()
+        .or_else(|| std::env::var("AETHER_NOIZE").ok())
+        .unwrap_or_else(|| "firewall".to_string());
     log::info!("[+] obfuscation profile: {profile}");
     noize::from_profile(&profile)
 }
 
-fn aethernoize_config() -> aethernoize::AetherNoizeConfig {
-    let profile = std::env::var("AETHER_NOIZE").unwrap_or_else(|_| "balanced".to_string());
+fn aethernoize_config(cli: &cli::Cli) -> aethernoize::AetherNoizeConfig {
+    let profile = cli
+        .aethernoize
+        .clone()
+        .or_else(|| std::env::var("AETHER_NOIZE").ok())
+        .unwrap_or_else(|| "balanced".to_string());
     log::info!("[+] aethernoize profile: {profile}");
     aethernoize::from_profile(&profile)
 }
@@ -177,14 +194,23 @@ async fn load_or_provision_masque(config_path: &str) -> Result<account::Identity
     Ok(identity)
 }
 
-async fn select_peer(identity: &account::Identity, protocol: Protocol) -> Result<SocketAddr> {
+async fn select_peer(
+    identity: &account::Identity,
+    protocol: Protocol,
+    cli: &cli::Cli,
+) -> Result<SocketAddr> {
     let force_peer = match protocol {
-        Protocol::Masque => std::env::var("AETHER_PEER").ok(),
-        Protocol::WireGuard | Protocol::WarpInWarp => std::env::var("AETHER_WG_PEER")
-            .ok()
+        Protocol::Masque => cli
+            .peer
+            .clone()
+            .or_else(|| std::env::var("AETHER_PEER").ok()),
+        Protocol::WireGuard | Protocol::WarpInWarp => cli
+            .peer
+            .clone()
+            .or_else(|| std::env::var("AETHER_WG_PEER").ok())
             .or_else(|| std::env::var("AETHER_PEER").ok()),
     };
-    
+
     if let Some(p) = force_peer {
         let peer: SocketAddr = p
             .parse()
@@ -194,9 +220,9 @@ async fn select_peer(identity: &account::Identity, protocol: Protocol) -> Result
     }
 
     log::info!("[+] selected protocol: {}", protocol.label());
-    
-    let mode_str = select_scan_mode_str().await;
-    let ip = select_ip_version().await;
+
+    let mode_str = select_scan_mode_str(cli).await;
+    let ip = select_ip_version(cli).await;
 
     match protocol {
         Protocol::Masque => {
@@ -209,7 +235,7 @@ async fn select_peer(identity: &account::Identity, protocol: Protocol) -> Result
                 cert_pem: std::sync::Arc::from(identity.cert_pem.clone()),
                 key_pem: std::sync::Arc::from(identity.key_pem.clone()),
                 ech_config_list: None,
-                noize: noize_config(),
+                noize: noize_config(cli),
                 ports: prober::MASQUE_PORTS.to_vec(),
                 ip,
             };
@@ -221,16 +247,16 @@ async fn select_peer(identity: &account::Identity, protocol: Protocol) -> Result
         Protocol::WireGuard | Protocol::WarpInWarp => {
             log::info!("[*] hunting for a working WireGuard endpoint (handshake + data-plane verification)");
             let mode = wg_prober::WgScanMode::parse(&mode_str);
-            
+
             let private_key = identity.private_key_bytes()?;
             let peer_public = identity.peer_public_key_bytes()?;
-            
+
             let probe = wg_prober::WgProbe {
                 private_key: std::sync::Arc::new(private_key),
                 peer_public_key: std::sync::Arc::new(peer_public),
                 client_id: identity.client_id.clone(),
                 local_ipv4: identity.ipv4.parse().map_err(|_| AetherError::Other("invalid ipv4".into()))?,
-                aethernoize: aethernoize_config(),
+                aethernoize: aethernoize_config(cli),
                 ports: wireguard::WG_PORTS.to_vec(),
                 ip,
             };
@@ -242,9 +268,14 @@ async fn select_peer(identity: &account::Identity, protocol: Protocol) -> Result
     }
 }
 
-async fn resolve_ech() -> Option<Vec<u8>> {
-    match std::env::var("AETHER_ECH") {
-        Ok(v) if v.eq_ignore_ascii_case("auto") => match dns::fetch_ech_config().await {
+async fn resolve_ech(cli: &cli::Cli) -> Option<Vec<u8>> {
+    let ech_val = cli
+        .ech
+        .clone()
+        .or_else(|| std::env::var("AETHER_ECH").ok());
+
+    match ech_val.as_deref() {
+        Some(v) if v.eq_ignore_ascii_case("auto") => match dns::fetch_ech_config().await {
             Ok(raw) => {
                 log::info!("[+] fetched ECHConfigList automatically ({} bytes)", raw.len());
                 Some(raw)
@@ -254,16 +285,18 @@ async fn resolve_ech() -> Option<Vec<u8>> {
                 None
             }
         },
-        Ok(b64) if !b64.is_empty() => match tls::decode_ech_config_list(&b64) {
-            Ok(v) => {
-                log::info!("[+] using ECHConfigList from AETHER_ECH");
-                Some(v)
+        Some(b64) if !b64.is_empty() && !b64.eq_ignore_ascii_case("off") => {
+            match tls::decode_ech_config_list(b64) {
+                Ok(v) => {
+                    log::info!("[+] using ECHConfigList from --ech / AETHER_ECH");
+                    Some(v)
+                }
+                Err(e) => {
+                    log::warn!("[-] bad ECH config: {e}; continuing without ECH");
+                    None
+                }
             }
-            Err(e) => {
-                log::warn!("[-] bad AETHER_ECH: {e}; continuing without ECH");
-                None
-            }
-        },
+        }
         _ => {
             log::info!("[+] ECH disabled (warp masque endpoint does not accept ECH); SNI sent in cleartext");
             None
@@ -276,6 +309,7 @@ async fn run_masque_tunnel(
     peer: SocketAddr,
     ech: Option<Vec<u8>>,
     listen: SocketAddr,
+    cli: &cli::Cli,
 ) -> Result<()> {
     let (chans, internals) = quic::channels();
 
@@ -287,7 +321,7 @@ async fn run_masque_tunnel(
         cert_pem: identity.cert_pem.clone(),
         key_pem: identity.key_pem.clone(),
         ech_config_list: ech,
-        noize: noize_config(),
+        noize: noize_config(cli),
     };
 
     let quic::Channels {
@@ -344,20 +378,30 @@ async fn run_masque_tunnel(
     }
 }
 
-fn wg_keepalive_secs() -> u16 {
-    std::env::var("AETHER_WG_KEEPALIVE")
-        .ok()
-        .and_then(|v| v.parse().ok())
+fn wg_keepalive_secs(cli: &cli::Cli) -> u16 {
+    cli.wg_keepalive
         .filter(|&v| v > 0)
+        .or_else(|| {
+            std::env::var("AETHER_WG_KEEPALIVE")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .filter(|&v: &u16| v > 0)
+        })
         .unwrap_or(5)
 }
 
-fn wg_profile_candidates() -> Vec<(String, aethernoize::AetherNoizeConfig)> {
-    let primary = std::env::var("AETHER_NOIZE").unwrap_or_else(|_| "balanced".to_string());
+fn wg_profile_candidates(cli: &cli::Cli) -> Vec<(String, aethernoize::AetherNoizeConfig)> {
+    let primary = cli
+        .aethernoize
+        .clone()
+        .or_else(|| std::env::var("AETHER_NOIZE").ok())
+        .unwrap_or_else(|| "balanced".to_string());
     log::info!("[+] aethernoize primary profile: {primary}");
 
     let mut names = vec![primary.clone()];
-    if std::env::var("AETHER_WG_NO_PROFILE_RETRY").is_err() {
+    if cli.wg_no_profile_retry || std::env::var("AETHER_WG_NO_PROFILE_RETRY").is_ok() {
+        // don't add fallback profiles
+    } else {
         for fallback in ["balanced", "aggressive", "light", "off"] {
             if !names.iter().any(|n| n.eq_ignore_ascii_case(fallback)) {
                 names.push(fallback.to_string());
@@ -401,12 +445,18 @@ async fn hunt_wg_peer_with_profile(
     Ok(SocketAddr::new(best.ip, best.port))
 }
 
-async fn run_wireguard(identity: account::Identity, listen: SocketAddr) -> Result<()> {
-    let candidates = wg_profile_candidates();
+async fn run_wireguard(
+    identity: account::Identity,
+    listen: SocketAddr,
+    cli: &cli::Cli,
+) -> Result<()> {
+    let candidates = wg_profile_candidates(cli);
     let multi = candidates.len() > 1;
 
-    let forced = std::env::var("AETHER_WG_PEER")
-        .ok()
+    let forced = cli
+        .peer
+        .clone()
+        .or_else(|| std::env::var("AETHER_WG_PEER").ok())
         .or_else(|| std::env::var("AETHER_PEER").ok());
 
     let private_key = identity.private_key_bytes()?;
@@ -448,8 +498,8 @@ async fn run_wireguard(identity: account::Identity, listen: SocketAddr) -> Resul
         }
         chosen
     } else {
-        let mode_str = select_scan_mode_str().await;
-        let ip = select_ip_version().await;
+        let mode_str = select_scan_mode_str(cli).await;
+        let ip = select_ip_version(cli).await;
 
         let mut chosen = None;
         for (name, profile) in &candidates {
@@ -476,7 +526,7 @@ async fn run_wireguard(identity: account::Identity, listen: SocketAddr) -> Resul
 
     let (peer, profile) = selected.ok_or(AetherError::NoCleanEndpoint)?;
     log::info!("[+] using cloudflare edge {peer}");
-    run_wireguard_tunnel(identity, peer, profile, listen).await
+    run_wireguard_tunnel(identity, peer, profile, listen, cli).await
 }
 
 async fn run_wireguard_tunnel(
@@ -484,14 +534,15 @@ async fn run_wireguard_tunnel(
     peer: SocketAddr,
     aethernoize: aethernoize::AetherNoizeConfig,
     listen: SocketAddr,
+    cli: &cli::Cli,
 ) -> Result<()> {
     log::info!("[*] confirming WireGuard handshake + data flow with {peer}...");
-    
+
     let private_key = identity.private_key_bytes()?;
     let peer_public = identity.peer_public_key_bytes()?;
     let ipv4: std::net::Ipv4Addr = identity.ipv4.parse()
         .map_err(|_| AetherError::Other("invalid ipv4".into()))?;
-    
+
     let test_result = wireguard::verify_endpoint(
         peer,
         private_key,
@@ -502,7 +553,7 @@ async fn run_wireguard_tunnel(
         std::time::Duration::from_secs(10),
     )
     .await;
-    
+
     match test_result {
         Ok(rtt) => {
             log::info!("[+] handshake successful (rtt {:?})", rtt);
@@ -512,7 +563,7 @@ async fn run_wireguard_tunnel(
             return Err(AetherError::Other(format!("WireGuard handshake failed: {e}")));
         }
     }
-    
+
     let ipv6: std::net::Ipv6Addr = identity.ipv6.parse()
         .map_err(|_| AetherError::Other("invalid ipv6".into()))?;
 
@@ -524,7 +575,7 @@ async fn run_wireguard_tunnel(
         local_ipv6: ipv6,
         client_id: identity.client_id,
         preshared_key: None,
-        persistent_keepalive: Some(wg_keepalive_secs()),
+        persistent_keepalive: Some(wg_keepalive_secs(cli)),
         aethernoize: std::sync::Arc::new(aethernoize),
     };
 
@@ -557,6 +608,7 @@ async fn establish_wg(
     obfuscate: bool,
     keepalive: u16,
     label: &'static str,
+    cli: &cli::Cli,
 ) -> Result<netstack::StackHandle> {
     let private_key = identity.private_key_bytes()?;
     let peer_public = identity.peer_public_key_bytes()?;
@@ -571,7 +623,7 @@ async fn establish_wg(
         .map_err(|_| AetherError::Other("invalid ipv6".into()))?;
 
     let profile = if obfuscate {
-        aethernoize_config()
+        aethernoize_config(cli)
     } else {
         aethernoize::from_profile("off")
     };
@@ -652,9 +704,10 @@ async fn run_warp_in_warp(
     secondary: account::Identity,
     peer: SocketAddr,
     listen: SocketAddr,
+    cli: &cli::Cli,
 ) -> Result<()> {
     log::info!("[*] establishing outer WARP tunnel to {peer}...");
-    let outer_stack = establish_wg(&primary, peer, TUNNEL_MTU, true, 5, "outer").await?;
+    let outer_stack = establish_wg(&primary, peer, TUNNEL_MTU, true, 5, "outer", cli).await?;
 
     tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
 
@@ -662,7 +715,7 @@ async fn run_warp_in_warp(
     log::info!("[+] inner endpoint tunneled through outer warp via {forwarder}");
 
     log::info!("[*] establishing inner WARP tunnel (warp-in-warp)...");
-    let inner_stack = establish_wg(&secondary, forwarder, INNER_MTU, false, 20, "inner").await?;
+    let inner_stack = establish_wg(&secondary, forwarder, INNER_MTU, false, 20, "inner", cli).await?;
 
     log::info!("[+] socks5 server listening on {listen}");
     socks::serve(listen, inner_stack).await
@@ -688,29 +741,40 @@ async fn prompt_line(prompt: &str) -> Option<String> {
     }
 }
 
-async fn select_scan_mode() -> prober::ScanMode {
-    if let Ok(v) = std::env::var("AETHER_SCAN") {
-        return prober::ScanMode::parse(&v);
+async fn resolve_protocol(cli: &cli::Cli) -> Protocol {
+    // CLI --mode flag
+    if let Some(ref mode) = cli.mode {
+        return Protocol::parse(mode);
     }
 
-    let answer = prompt_line(
-        "\nScan mode:\n  [1] turbo     (fast, first hit)\n  [2] balanced  (default)\n  [3] thorough  (deep, best ping)\n  [4] stealth   (quiet, patient)\nChoose [1-4] (default 2): ",
-    )
-    .await;
-
-    match answer.as_deref() {
-        Some("1") => prober::ScanMode::Turbo,
-        Some("3") => prober::ScanMode::Thorough,
-        Some("4") => prober::ScanMode::Stealth,
-        _ => prober::ScanMode::Balanced,
+    // Env var (existing behavior)
+    if cli.peer.is_some() || std::env::var("AETHER_PEER").is_ok() || std::env::var("AETHER_WG_PEER").is_ok() {
+        match std::env::var("AETHER_PROTOCOL") {
+            Ok(v) => return Protocol::parse(&v),
+            Err(_) => return Protocol::Masque,
+        }
     }
+
+    if let Ok(v) = std::env::var("AETHER_PROTOCOL") {
+        return Protocol::parse(&v);
+    }
+
+    // Interactive prompt
+    select_protocol_interactive().await
 }
 
-async fn select_scan_mode_str() -> String {
+async fn select_scan_mode_str(cli: &cli::Cli) -> String {
+    // CLI --scan flag
+    if let Some(ref scan) = cli.scan {
+        return scan.clone();
+    }
+
+    // Env var
     if let Ok(v) = std::env::var("AETHER_SCAN") {
         return v;
     }
 
+    // Interactive prompt
     let answer = prompt_line(
         "\nScan mode:\n  [1] turbo     (fast, first hit)\n  [2] balanced  (default)\n  [3] thorough  (deep, best ping)\n  [4] stealth   (quiet, patient)\nChoose [1-4] (default 2): ",
     )
@@ -724,11 +788,31 @@ async fn select_scan_mode_str() -> String {
     }
 }
 
-async fn select_protocol() -> Protocol {
-    if let Ok(v) = std::env::var("AETHER_PROTOCOL") {
-        return Protocol::parse(&v);
+async fn select_ip_version(cli: &cli::Cli) -> prober::IpScan {
+    // CLI --ip flag
+    if let Some(ref ip) = cli.ip {
+        return prober::IpScan::parse(ip);
     }
 
+    // Env var
+    if let Ok(v) = std::env::var("AETHER_IP") {
+        return prober::IpScan::parse(&v);
+    }
+
+    // Interactive prompt
+    let answer = prompt_line(
+        "\nIP version to scan:\n  [1] IPv4 (default)\n  [2] IPv6\n  [3] Both\nChoose [1-3] (default 1): ",
+    )
+    .await;
+
+    match answer.as_deref() {
+        Some("2") => prober::IpScan::V6,
+        Some("3") => prober::IpScan::Both,
+        _ => prober::IpScan::V4,
+    }
+}
+
+async fn select_protocol_interactive() -> Protocol {
     let answer = prompt_line(
         "\nProtocol:\n  [1] MASQUE (modern, QUIC/H3, default)\n  [2] WireGuard (classic, faster)\n  [3] WARP-in-WARP / gool\nChoose [1-3] (default 1): ",
     )
@@ -763,22 +847,5 @@ impl Protocol {
             Protocol::WireGuard => "WireGuard",
             Protocol::WarpInWarp => "WARP-in-WARP (gool)",
         }
-    }
-}
-
-async fn select_ip_version() -> prober::IpScan {
-    if let Ok(v) = std::env::var("AETHER_IP") {
-        return prober::IpScan::parse(&v);
-    }
-
-    let answer = prompt_line(
-        "\nIP version to scan:\n  [1] IPv4 (default)\n  [2] IPv6\n  [3] Both\nChoose [1-3] (default 1): ",
-    )
-    .await;
-
-    match answer.as_deref() {
-        Some("2") => prober::IpScan::V6,
-        Some("3") => prober::IpScan::Both,
-        _ => prober::IpScan::V4,
     }
 }
