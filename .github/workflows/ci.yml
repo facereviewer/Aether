@@ -1,0 +1,280 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ------------------------------------------------------------------
+  # Windows x86_64 — built on windows-latest with NASM for boring-sys.
+  # ------------------------------------------------------------------
+  windows:
+    name: Build aether-windows-x86_64.zip
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: aether
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Install CMake and Ninja
+        uses: lukka/get-cmake@latest
+
+      - name: Install NASM
+        uses: ilammy/setup-nasm@v1
+
+      - name: Build release binary
+        run: cargo build --release --target x86_64-pc-windows-msvc
+
+      - name: Package archive
+        shell: pwsh
+        run: Compress-Archive -Path target/x86_64-pc-windows-msvc/release/aether.exe -DestinationPath aether-windows-x86_64.zip
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aether-windows-x86_64.zip
+          path: aether/aether-windows-x86_64.zip
+          if-no-files-found: error
+
+  # ------------------------------------------------------------------
+  # Linux x86_64 — built in Fedora container for fresh toolchain.
+  # ------------------------------------------------------------------
+  linux-x86_64:
+    name: Build aether-linux-x86_64.tar.gz
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:latest
+    defaults:
+      run:
+        working-directory: aether
+    steps:
+      - name: Install system dependencies
+        working-directory: /
+        run: |
+          dnf -y install \
+            gcc gcc-c++ make cmake ninja-build golang nasm clang \
+            perl perl-FindBin perl-IPC-Cmd \
+            curl git tar gzip xz findutils which
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        working-directory: /
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Build release binary
+        run: cargo build --release --target x86_64-unknown-linux-gnu
+
+      - name: Package archive
+        run: |
+          cd target/x86_64-unknown-linux-gnu/release
+          tar -czf ../../../aether-linux-x86_64.tar.gz aether
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aether-linux-x86_64.tar.gz
+          path: aether/aether-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+  # ------------------------------------------------------------------
+  # Linux arm64 — built on native arm64 runner with Fedora container.
+  # ------------------------------------------------------------------
+  linux-arm64:
+    name: Build aether-linux-arm64.tar.gz
+    runs-on: ubuntu-24.04-arm
+    container:
+      image: fedora:latest
+    defaults:
+      run:
+        working-directory: aether
+    steps:
+      - name: Install system dependencies
+        working-directory: /
+        run: |
+          dnf -y install \
+            gcc gcc-c++ make cmake ninja-build golang nasm clang \
+            perl perl-FindBin perl-IPC-Cmd \
+            curl git tar gzip xz findutils which
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        working-directory: /
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Build release binary
+        run: cargo build --release --target aarch64-unknown-linux-gnu
+
+      - name: Package archive
+        run: |
+          cd target/aarch64-unknown-linux-gnu/release
+          tar -czf ../../../aether-linux-arm64.tar.gz aether
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aether-linux-arm64.tar.gz
+          path: aether/aether-linux-arm64.tar.gz
+          if-no-files-found: error
+
+  # ------------------------------------------------------------------
+  # Linux armv7 — cross-compiled on Ubuntu with gnueabihf toolchain.
+  # ------------------------------------------------------------------
+  linux-armv7:
+    name: Build aether-linux-armv7.tar.gz
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: aether
+    env:
+      CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: arm-linux-gnueabihf-gcc
+      CC_armv7_unknown_linux_gnueabihf: arm-linux-gnueabihf-gcc
+      CXX_armv7_unknown_linux_gnueabihf: arm-linux-gnueabihf-g++
+      AR_armv7_unknown_linux_gnueabihf: arm-linux-gnueabihf-ar
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: armv7-unknown-linux-gnueabihf
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Install CMake and Ninja
+        uses: lukka/get-cmake@latest
+
+      - name: Install ARM cross toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
+
+      - name: Build release binary
+        run: cargo build --release --target armv7-unknown-linux-gnueabihf
+
+      - name: Package archive
+        run: |
+          cd target/armv7-unknown-linux-gnueabihf/release
+          tar -czf ../../../aether-linux-armv7.tar.gz aether
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aether-linux-armv7.tar.gz
+          path: aether/aether-linux-armv7.tar.gz
+          if-no-files-found: error
+
+  # ------------------------------------------------------------------
+  # Publish — collect artifacts, generate changelog, create release.
+  # Runs only on push to main (not PRs).
+  # ------------------------------------------------------------------
+  release:
+    name: Publish pre-release
+    needs: [windows, linux-x86_64, linux-arm64, linux-armv7]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -z "$LAST_TAG" ]; then
+            COMMITS=$(git log --pretty=format:"- %s (%h)" HEAD)
+          else
+            COMMITS=$(git log --pretty=format:"- %s (%h)" ${LAST_TAG}..HEAD)
+          fi
+
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          DATE=$(date -u +"%Y-%m-%d")
+
+          {
+            echo "body<<EOF"
+            echo "## Aether nightly — ${DATE} (${SHORT_SHA})"
+            echo ""
+            echo "### Changes"
+            echo ""
+            if [ -z "$COMMITS" ]; then
+              echo "- No changes"
+            else
+              echo "$COMMITS"
+            fi
+            echo ""
+            echo "---"
+            echo ""
+            echo "### Downloads"
+            echo ""
+            echo "| Platform | File |"
+            echo "|----------|------|"
+            echo "| Windows x64 | \`aether-windows-x86_64.zip\` |"
+            echo "| Linux x64 | \`aether-linux-x86_64.tar.gz\` |"
+            echo "| Linux arm64 | \`aether-linux-arm64.tar.gz\` |"
+            echo "| Linux armv7 | \`aether-linux-armv7.tar.gz\` |"
+            echo ""
+            echo "### Quick start"
+            echo ""
+            echo "\`\`\`bash"
+            echo "# Run with CLI flags"
+            echo "./aether --mode masq --scan turbo"
+            echo ""
+            echo "# Or interactive mode"
+            echo "./aether"
+            echo ""
+            echo "# See all options"
+            echo "./aether --help"
+            echo "\`\`\`"
+            echo ""
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          name: "Aether nightly"
+          draft: false
+          prerelease: true
+          body: ${{ steps.changelog.outputs.body }}
+          files: dist/**/*
