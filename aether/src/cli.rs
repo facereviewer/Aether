@@ -14,6 +14,7 @@ pub struct Cli {
     pub wg_no_profile_retry: bool,
     pub verbose: bool,
     pub gui: bool,
+    pub cli: bool,
     pub tun: bool,
     pub allow_lan: bool,
     pub auth: Option<(String, String)>,
@@ -36,6 +37,7 @@ impl Cli {
             wg_no_profile_retry: false,
             verbose: false,
             gui: false,
+            cli: false,
             tun: false,
             allow_lan: false,
             auth: None,
@@ -64,6 +66,7 @@ impl Cli {
                 }
                 "--wg-no-profile-retry" => cli.wg_no_profile_retry = true,
                 "--gui" => cli.gui = true,
+                "--cli" => cli.cli = true,
                 "--tun" => cli.tun = true,
                 "--allow-lan" => cli.allow_lan = true,
                 "--auth" => {
@@ -111,7 +114,8 @@ OPTIONS:
         --auth <USER:PASS>      Enable proxy authentication
         --tun                   Use TUN device instead of proxy (requires root)
     -v, --verbose               Enable debug logging (RUST_LOG=debug)
-        --gui                   Launch the GUI instead of CLI
+        --gui                   Launch the GUI
+        --cli                   Launch interactive CLI (default without args is GUI)
     -h, --help                  Print help
 
 ENVIRONMENT VARIABLES (flags take precedence):

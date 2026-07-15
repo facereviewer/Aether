@@ -6,11 +6,22 @@ use eframe::egui;
 use crate::preset::{Preset, PresetStore};
 
 pub fn run(_cli: crate::cli::Cli) {
+    let icon_bytes = include_bytes!("icon.png");
+    let icon = eframe::icon_data::from_png_bytes(icon_bytes)
+        .ok()
+        .map(|d| std::sync::Arc::new(d));
+
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_inner_size([820.0, 680.0])
+        .with_min_inner_size([650.0, 500.0])
+        .with_title("Aether");
+
+    if let Some(icon_data) = icon {
+        viewport = viewport.with_icon(icon_data);
+    }
+
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([820.0, 680.0])
-            .with_min_inner_size([650.0, 500.0])
-            .with_title("Aether"),
+        viewport,
         ..Default::default()
     };
 
@@ -468,6 +479,7 @@ async fn run_tunnel_from_preset(
         wg_no_profile_retry: preset.wg_no_profile_retry,
         verbose: preset.verbose,
         gui: false,
+        cli: false,
         tun: preset.tun_mode,
         allow_lan: preset.allow_lan,
         auth: if preset.auth_enabled { Some((preset.auth_user.clone(), preset.auth_pass.clone())) } else { None },

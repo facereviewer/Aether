@@ -31,10 +31,23 @@ const DEFAULT_CONFIG: &str = "aether.toml";
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // If no arguments given, launch GUI
+    if std::env::args().len() <= 1 {
+        gui::run(cli::Cli::parse());
+        return Ok(());
+    }
+
     let cli_args = cli::Cli::parse();
 
     // Launch GUI if --gui flag is set
     if cli_args.gui {
+        gui::run(cli_args);
+        return Ok(());
+    }
+
+    // If --cli is not set and no other meaningful args, still launch GUI
+    // (handles case where user runs `aether --verbose` etc. but doesn't want CLI)
+    if !cli_args.cli && cli_args.bind.is_none() && cli_args.mode.is_none() && !cli_args.tun {
         gui::run(cli_args);
         return Ok(());
     }
