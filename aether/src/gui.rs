@@ -8,8 +8,8 @@ use crate::preset::{Preset, PresetStore};
 pub fn run(_cli: crate::cli::Cli) {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([820.0, 620.0])
-            .with_min_inner_size([600.0, 450.0])
+            .with_inner_size([820.0, 680.0])
+            .with_min_inner_size([650.0, 500.0])
             .with_title("Aether"),
         ..Default::default()
     };
@@ -71,7 +71,6 @@ struct AetherGui {
 
 impl eframe::App for AetherGui {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Poll log messages from background thread
         if let Some(rx) = &self.log_rx {
             if let Ok(logs) = rx.lock() {
                 for msg in logs.iter() {
@@ -82,26 +81,22 @@ impl eframe::App for AetherGui {
             }
         }
 
-        // Top status bar
         self.render_top_bar(ctx);
 
-        // Left panel: presets
         egui::SidePanel::left("presets")
             .resizable(true)
-            .default_width(180.0)
-            .min_width(150.0)
+            .default_width(170.0)
+            .min_width(140.0)
             .show(ctx, |ui| {
                 self.render_presets_panel(ui);
             });
 
-        // Central panel
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 self.render_config(ui);
             });
         });
 
-        // Dialogs
         self.render_dialogs(ctx);
     }
 }
@@ -111,18 +106,14 @@ impl AetherGui {
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                // App title
                 ui.heading("Aether");
                 ui.separator();
 
-                // Status indicator
                 let (status_text, status_color) = match &self.status {
                     Status::Idle => ("Ready".into(), egui::Color32::GRAY),
                     Status::Connecting => ("Connecting...".into(), egui::Color32::from_rgb(220, 180, 50)),
                     Status::Connected => {
-                        let elapsed = self.connected_since
-                            .map(|t| t.elapsed().as_secs())
-                            .unwrap_or(0);
+                        let elapsed = self.connected_since.map(|t| t.elapsed().as_secs()).unwrap_or(0);
                         let mins = elapsed / 60;
                         let secs = elapsed % 60;
                         (format!("Connected ({:02}:{:02})", mins, secs), egui::Color32::from_rgb(60, 200, 60))
@@ -134,24 +125,16 @@ impl AetherGui {
                 ui.label(egui::RichText::new(&status_text).color(status_color).strong());
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    // Connect/Disconnect button
-                    let btn_text = match &self.status {
-                        Status::Connected | Status::Connecting => "Disconnect",
-                        Status::Disconnecting => "Disconnecting...",
-                        _ => "Connect",
-                    };
-                    let btn_color = match &self.status {
-                        Status::Connected | Status::Connecting => egui::Color32::from_rgb(180, 50, 50),
-                        _ => egui::Color32::from_rgb(50, 160, 50),
+                    let (btn_text, btn_color) = match &self.status {
+                        Status::Connected | Status::Connecting => ("Disconnect", egui::Color32::from_rgb(180, 50, 50)),
+                        Status::Disconnecting => ("Disconnecting...", egui::Color32::from_rgb(150, 120, 50)),
+                        _ => ("Connect", egui::Color32::from_rgb(50, 160, 50)),
                     };
 
-                    let btn = ui.add(
-                        egui::Button::new(
-                            egui::RichText::new(btn_text).color(egui::Color32::WHITE).strong()
-                        ).fill(btn_color).min_size(egui::vec2(100.0, 28.0))
-                    );
-
-                    if btn.clicked() {
+                    if ui.add(
+                        egui::Button::new(egui::RichText::new(btn_text).color(egui::Color32::WHITE).strong())
+                            .fill(btn_color).min_size(egui::vec2(100.0, 28.0))
+                    ).clicked() {
                         match &self.status {
                             Status::Idle | Status::Error(_) => self.connect(),
                             Status::Connected | Status::Connecting => self.disconnect(),
@@ -177,35 +160,25 @@ impl AetherGui {
         ui.separator();
 
         egui::ScrollArea::vertical().show(ui, |ui| {
-            let preset_names: Vec<String> = self.preset_store.presets.iter().map(|p| p.name.clone()).collect();
-            for name in &preset_names {
+            let names: Vec<String> = self.preset_store.presets.iter().map(|p| p.name.clone()).collect();
+            for name in &names {
                 let is_selected = self.selected_preset_name == *name;
                 let response = ui.selectable_label(is_selected, name.as_str());
-
                 if response.clicked() {
                     self.selected_preset_name = name.clone();
-                    if let Some(preset) = self.preset_store.presets.iter().find(|p| p.name == *name) {
-                        self.editing = preset.clone();
+                    if let Some(p) = self.preset_store.presets.iter().find(|p| p.name == *name) {
+                        self.editing = p.clone();
                     }
                 }
-
-                // Right-click context menu for delete
                 response.context_menu(|ui| {
-                    if !self.is_builtin(name) {
-                        if ui.button("Delete").clicked() {
-                            self.show_delete_confirm = true;
-                            self.delete_target = name.clone();
-                            ui.close_menu();
-                        }
-                    } else {
-                        ui.label("Built-in preset");
+                    if !self.is_builtin(name) && ui.button("Delete").clicked() {
+                        self.show_delete_confirm = true;
+                        self.delete_target = name.clone();
+                        ui.close_menu();
                     }
                 });
             }
         });
-
-        ui.separator();
-        ui.small("Right-click to delete custom presets");
     }
 
     fn render_config(&mut self, ui: &mut egui::Ui) {
@@ -214,23 +187,18 @@ impl AetherGui {
             ui.strong("Connection");
             ui.horizontal(|ui| {
                 ui.label("Protocol:");
-                egui::ComboBox::from_id_salt("protocol")
-                    .width(140.0)
-                    .selected_text(&self.editing.protocol)
-                    .show_ui(ui, |ui| {
-                        for (val, desc) in &[("masq", "MASQUE (HTTP/3)"), ("wg", "WireGuard"), ("gool", "WARP-in-WARP")] {
-                            ui.selectable_value(&mut self.editing.protocol, val.to_string(), *desc);
-                        }
+                egui::ComboBox::from_id_salt("protocol").width(140.0)
+                    .selected_text(&self.editing.protocol).show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.editing.protocol, "masq".into(), "MASQUE (HTTP/3)");
+                        ui.selectable_value(&mut self.editing.protocol, "wg".into(), "WireGuard");
+                        ui.selectable_value(&mut self.editing.protocol, "gool".into(), "WARP-in-WARP");
                     });
-
                 ui.separator();
-
                 ui.label("Output:");
-                egui::ComboBox::from_id_salt("output_mode")
-                    .width(140.0)
-                    .selected_text(if self.editing.tun_mode { "TUN (system-wide)" } else { "SOCKS5 (local proxy)" })
+                egui::ComboBox::from_id_salt("output_mode").width(150.0)
+                    .selected_text(if self.editing.tun_mode { "TUN (system-wide)" } else { "Mixed Proxy" })
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.editing.tun_mode, false, "SOCKS5 (local proxy)");
+                        ui.selectable_value(&mut self.editing.tun_mode, false, "Mixed Proxy (HTTP+SOCKS5)");
                         ui.selectable_value(&mut self.editing.tun_mode, true, "TUN (system-wide)");
                     });
             });
@@ -245,95 +213,113 @@ impl AetherGui {
             }
         });
 
-        ui.add_space(6.0);
+        ui.add_space(4.0);
+
+        // === Proxy Settings ===
+        if !self.editing.tun_mode {
+            ui.group(|ui| {
+                ui.strong("Proxy Settings");
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut self.editing.allow_lan, "Allow from LAN (bind 0.0.0.0)");
+                    if self.editing.allow_lan {
+                        self.editing.bind = self.editing.bind.replace("127.0.0.1", "0.0.0.0");
+                    }
+                });
+
+                ui.checkbox(&mut self.editing.auth_enabled, "Enable authentication");
+                if self.editing.auth_enabled {
+                    ui.horizontal(|ui| {
+                        ui.label("Username:");
+                        ui.add(egui::TextEdit::singleline(&mut self.editing.auth_user).desired_width(120.0).password(false));
+                        ui.label("Password:");
+                        ui.add(egui::TextEdit::singleline(&mut self.editing.auth_pass).desired_width(120.0).password(true));
+                    });
+                }
+
+                ui.horizontal(|ui| {
+                    let proxy_label = if self.editing.system_proxy { "System Proxy: ON" } else { "System Proxy: OFF" };
+                    let proxy_color = if self.editing.system_proxy { egui::Color32::from_rgb(60, 180, 60) } else { egui::Color32::GRAY };
+
+                    if ui.toggle_value(&mut self.editing.system_proxy, egui::RichText::new(proxy_label).color(proxy_color)).clicked() {
+                        if self.editing.system_proxy {
+                            if let Ok(addr) = self.editing.bind.parse::<std::net::SocketAddr>() {
+                                let _ = crate::system_proxy::set_proxy(addr);
+                            }
+                        } else {
+                            let _ = crate::system_proxy::clear_proxy();
+                        }
+                    }
+                });
+            });
+        }
+
+        ui.add_space(4.0);
 
         // === Scanning ===
         ui.group(|ui| {
             ui.strong("Endpoint Discovery");
             ui.horizontal(|ui| {
-                ui.label("Scan mode:");
-                egui::ComboBox::from_id_salt("scan")
-                    .width(140.0)
-                    .selected_text(&self.editing.scan_mode)
-                    .show_ui(ui, |ui| {
-                        for (val, desc) in &[
-                            ("turbo", "Turbo (fast, first hit)"),
-                            ("balanced", "Balanced (default)"),
-                            ("thorough", "Thorough (deep, best ping)"),
-                            ("stealth", "Stealth (quiet, patient)"),
-                        ] {
-                            ui.selectable_value(&mut self.editing.scan_mode, val.to_string(), *desc);
-                        }
+                ui.label("Scan:");
+                egui::ComboBox::from_id_salt("scan").width(140.0)
+                    .selected_text(&self.editing.scan_mode).show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.editing.scan_mode, "turbo".into(), "Turbo (fast)");
+                        ui.selectable_value(&mut self.editing.scan_mode, "balanced".into(), "Balanced");
+                        ui.selectable_value(&mut self.editing.scan_mode, "thorough".into(), "Thorough (deep)");
+                        ui.selectable_value(&mut self.editing.scan_mode, "stealth".into(), "Stealth (quiet)");
                     });
-
                 ui.separator();
-
-                ui.label("IP version:");
-                egui::ComboBox::from_id_salt("ip")
-                    .width(100.0)
-                    .selected_text(&self.editing.ip_version)
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.editing.ip_version, "v4".to_string(), "IPv4");
-                        ui.selectable_value(&mut self.editing.ip_version, "v6".to_string(), "IPv6");
-                        ui.selectable_value(&mut self.editing.ip_version, "both".to_string(), "Both");
+                ui.label("IP:");
+                egui::ComboBox::from_id_salt("ip").width(80.0)
+                    .selected_text(&self.editing.ip_version).show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.editing.ip_version, "v4".into(), "IPv4");
+                        ui.selectable_value(&mut self.editing.ip_version, "v6".into(), "IPv6");
+                        ui.selectable_value(&mut self.editing.ip_version, "both".into(), "Both");
                     });
             });
-
             ui.horizontal(|ui| {
                 ui.label("Force peer:");
                 ui.add(egui::TextEdit::singleline(&mut self.editing.peer).desired_width(200.0).hint_text("auto-detect if empty"));
             });
         });
 
-        ui.add_space(6.0);
+        ui.add_space(4.0);
 
         // === Security ===
         ui.group(|ui| {
             ui.strong("Security & Obfuscation");
             ui.horizontal(|ui| {
-                ui.label("MASQUE obsc:");
-                egui::ComboBox::from_id_salt("noize")
-                    .width(120.0)
-                    .selected_text(&self.editing.masque_obfuscation)
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.editing.masque_obfuscation, "off".to_string(), "Off");
-                        ui.selectable_value(&mut self.editing.masque_obfuscation, "firewall".to_string(), "Firewall");
-                        ui.selectable_value(&mut self.editing.masque_obfuscation, "gfw".to_string(), "GFW");
+                ui.label("MASQUE:");
+                egui::ComboBox::from_id_salt("noize").width(110.0)
+                    .selected_text(&self.editing.masque_obfuscation).show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.editing.masque_obfuscation, "off".into(), "Off");
+                        ui.selectable_value(&mut self.editing.masque_obfuscation, "firewall".into(), "Firewall");
+                        ui.selectable_value(&mut self.editing.masque_obfuscation, "gfw".into(), "GFW");
                     });
-
                 ui.separator();
-
-                ui.label("WG obsc:");
-                egui::ComboBox::from_id_salt("aethernoize")
-                    .width(120.0)
-                    .selected_text(&self.editing.wg_obfuscation)
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.editing.wg_obfuscation, "off".to_string(), "Off");
-                        ui.selectable_value(&mut self.editing.wg_obfuscation, "light".to_string(), "Light");
-                        ui.selectable_value(&mut self.editing.wg_obfuscation, "balanced".to_string(), "Balanced");
-                        ui.selectable_value(&mut self.editing.wg_obfuscation, "aggressive".to_string(), "Aggressive");
+                ui.label("WireGuard:");
+                egui::ComboBox::from_id_salt("aethernoize").width(110.0)
+                    .selected_text(&self.editing.wg_obfuscation).show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.editing.wg_obfuscation, "off".into(), "Off");
+                        ui.selectable_value(&mut self.editing.wg_obfuscation, "light".into(), "Light");
+                        ui.selectable_value(&mut self.editing.wg_obfuscation, "balanced".into(), "Balanced");
+                        ui.selectable_value(&mut self.editing.wg_obfuscation, "aggressive".into(), "Aggressive");
                     });
             });
-
             ui.horizontal(|ui| {
                 ui.label("ECH:");
-                egui::ComboBox::from_id_salt("ech")
-                    .width(120.0)
-                    .selected_text(&self.editing.ech)
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.editing.ech, "off".to_string(), "Off");
-                        ui.selectable_value(&mut self.editing.ech, "auto".to_string(), "Auto");
+                egui::ComboBox::from_id_salt("ech").width(100.0)
+                    .selected_text(&self.editing.ech).show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.editing.ech, "off".into(), "Off");
+                        ui.selectable_value(&mut self.editing.ech, "auto".into(), "Auto");
                     });
-
                 ui.separator();
-
-                ui.label("WG keepalive:");
+                ui.label("Keepalive:");
                 ui.add(egui::DragValue::new(&mut self.editing.wg_keepalive).speed(1).range(0..=120));
                 ui.label("s");
             });
         });
 
-        ui.add_space(6.0);
+        ui.add_space(4.0);
 
         // === Advanced ===
         ui.collapsing("Advanced", |ui| {
@@ -342,65 +328,54 @@ impl AetherGui {
                 ui.add(egui::TextEdit::singleline(&mut self.editing.config_path).desired_width(250.0));
             });
             ui.horizontal(|ui| {
-                ui.checkbox(&mut self.editing.wg_no_profile_retry, "No WG profile retry on failure");
+                ui.checkbox(&mut self.editing.wg_no_profile_retry, "No WG profile retry");
                 ui.separator();
                 ui.checkbox(&mut self.editing.verbose, "Verbose logging");
             });
         });
 
-        ui.add_space(8.0);
+        ui.add_space(6.0);
 
         // === Log ===
         ui.separator();
         ui.strong("Log");
-        egui::ScrollArea::vertical()
-            .max_height(140.0)
-            .stick_to_bottom(true)
-            .show(ui, |ui| {
-                if self.logs.is_empty() {
-                    ui.label(egui::RichText::new("No activity yet.").italics().weak());
-                } else {
-                    for line in &self.logs {
-                        ui.label(egui::RichText::new(line).monospace().small());
-                    }
+        egui::ScrollArea::vertical().max_height(130.0).stick_to_bottom(true).show(ui, |ui| {
+            if self.logs.is_empty() {
+                ui.label(egui::RichText::new("No activity yet.").italics().weak());
+            } else {
+                for line in &self.logs {
+                    ui.label(egui::RichText::new(line).monospace().small());
                 }
-            });
+            }
+        });
     }
 
     fn render_dialogs(&mut self, ctx: &egui::Context) {
         if self.show_new_preset_dialog {
-            egui::Window::new("New Preset")
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ctx, |ui| {
+            egui::Window::new("New Preset").collapsible(false).resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label("Name:");
                         ui.text_edit_singleline(&mut self.new_preset_name);
                     });
                     ui.horizontal(|ui| {
                         if ui.button("Create").clicked() && !self.new_preset_name.is_empty() {
-                            let mut preset = self.editing.clone();
-                            preset.name = self.new_preset_name.clone();
-                            self.preset_store.presets.push(preset);
+                            let mut p = self.editing.clone();
+                            p.name = self.new_preset_name.clone();
+                            self.preset_store.presets.push(p);
                             self.selected_preset_name = self.new_preset_name.clone();
                             let _ = self.preset_store.save();
                             self.show_new_preset_dialog = false;
                         }
-                        if ui.button("Cancel").clicked() {
-                            self.show_new_preset_dialog = false;
-                        }
+                        if ui.button("Cancel").clicked() { self.show_new_preset_dialog = false; }
                     });
                 });
         }
 
         if self.show_delete_confirm {
-            egui::Window::new("Delete Preset")
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ctx, |ui| {
-                    ui.label(format!("Delete preset '{}'?", self.delete_target));
+            egui::Window::new("Delete Preset").collapsible(false).resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+                    ui.label(format!("Delete '{}'?", self.delete_target));
                     ui.horizontal(|ui| {
                         if ui.button("Delete").clicked() {
                             self.preset_store.delete(&self.delete_target);
@@ -409,9 +384,7 @@ impl AetherGui {
                             let _ = self.preset_store.save();
                             self.show_delete_confirm = false;
                         }
-                        if ui.button("Cancel").clicked() {
-                            self.show_delete_confirm = false;
-                        }
+                        if ui.button("Cancel").clicked() { self.show_delete_confirm = false; }
                     });
                 });
         }
@@ -425,7 +398,7 @@ impl AetherGui {
         self.status = Status::Connecting;
         self.connected_since = Some(Instant::now());
         self.logs.clear();
-        self.logs.push("[GUI] Starting tunnel...".to_string());
+        self.logs.push("[GUI] Starting...".to_string());
 
         let preset = self.editing.clone();
         let logs_arc: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
@@ -467,22 +440,20 @@ async fn run_tunnel_from_preset(
     }
 
     push_log(&logs, &format!("[GUI] Protocol: {}", preset.protocol));
-    push_log(&logs, &format!("[GUI] Scan: {}", preset.scan_mode));
     if preset.tun_mode {
-        push_log(&logs, "[GUI] Mode: TUN (system-wide)");
+        push_log(&logs, "[GUI] Mode: TUN");
     } else {
-        push_log(&logs, &format!("[GUI] Mode: SOCKS5 on {}", preset.bind));
+        let proxy_type = "HTTP+SOCKS5";
+        let auth_info = if preset.auth_enabled { " (auth enabled)" } else { "" };
+        let lan_info = if preset.allow_lan { " (LAN)" } else { "" };
+        push_log(&logs, &format!("[GUI] Mode: {} on {}{}{}", proxy_type, preset.bind, auth_info, lan_info));
     }
 
     let listen: std::net::SocketAddr = match preset.bind.parse() {
         Ok(addr) => addr,
-        Err(e) => {
-            push_log(&logs, &format!("[GUI] Bad bind address: {e}"));
-            return;
-        }
+        Err(e) => { push_log(&logs, &format!("[GUI] Bad bind: {e}")); return; }
     };
 
-    // Build a Cli from the preset
     let cli_args = crate::cli::Cli {
         bind: Some(preset.bind.clone()),
         mode: Some(preset.protocol.clone()),
@@ -498,47 +469,39 @@ async fn run_tunnel_from_preset(
         verbose: preset.verbose,
         gui: false,
         tun: preset.tun_mode,
+        allow_lan: preset.allow_lan,
+        auth: if preset.auth_enabled { Some((preset.auth_user.clone(), preset.auth_pass.clone())) } else { None },
     };
 
     let protocol = crate::Protocol::parse(&preset.protocol);
-    push_log(&logs, &format!("[GUI] Resolved protocol: {}", protocol.label()));
+    push_log(&logs, &format!("[GUI] Protocol: {}", protocol.label()));
 
-    // Run the tunnel (this blocks until shutdown or error)
     let result: Result<()> = match protocol {
         crate::Protocol::Masque => {
             let config_path = crate::masque_config_path(&preset.config_path);
             match crate::load_or_provision_masque(&config_path).await {
                 Ok(identity) => {
-                    push_log(&logs, &format!("[GUI] Identity ready: {}", identity.device_id));
+                    push_log(&logs, &format!("[GUI] Identity: {}", identity.device_id));
                     match crate::select_peer(&identity, protocol, &cli_args).await {
                         Ok(peer) => {
                             push_log(&logs, &format!("[GUI] Peer: {peer}"));
                             let ech = crate::resolve_ech(&cli_args).await;
                             crate::run_masque_tunnel(identity, peer, ech, listen, &cli_args).await
                         }
-                        Err(e) => {
-                            push_log(&logs, &format!("[GUI] Peer selection failed: {e}"));
-                            Err(e)
-                        }
+                        Err(e) => { push_log(&logs, &format!("[GUI] Peer error: {e}")); Err(e) }
                     }
                 }
-                Err(e) => {
-                    push_log(&logs, &format!("[GUI] Identity failed: {e}"));
-                    Err(e)
-                }
+                Err(e) => { push_log(&logs, &format!("[GUI] Identity error: {e}")); Err(e) }
             }
         }
         crate::Protocol::WireGuard => {
             let config_path = crate::warp_config_path(&preset.config_path);
             match crate::load_or_provision_warp(&config_path).await {
                 Ok(identity) => {
-                    push_log(&logs, &format!("[GUI] Identity ready: {}", identity.device_id));
+                    push_log(&logs, &format!("[GUI] Identity: {}", identity.device_id));
                     crate::run_wireguard(identity, listen, &cli_args).await
                 }
-                Err(e) => {
-                    push_log(&logs, &format!("[GUI] Identity failed: {e}"));
-                    Err(e)
-                }
+                Err(e) => { push_log(&logs, &format!("[GUI] Identity error: {e}")); Err(e) }
             }
         }
         crate::Protocol::WarpInWarp => {
@@ -555,22 +518,16 @@ async fn run_tunnel_from_preset(
                             push_log(&logs, &format!("[GUI] Peer: {peer}"));
                             crate::run_warp_in_warp(primary, secondary, peer, listen, &cli_args).await
                         }
-                        Err(e) => {
-                            push_log(&logs, &format!("[GUI] Peer selection failed: {e}"));
-                            Err(e)
-                        }
+                        Err(e) => { push_log(&logs, &format!("[GUI] Peer error: {e}")); Err(e) }
                     }
                 }
-                (Err(e), _) | (_, Err(e)) => {
-                    push_log(&logs, &format!("[GUI] Identity failed: {e}"));
-                    Err(e)
-                }
+                (Err(e), _) | (_, Err(e)) => { push_log(&logs, &format!("[GUI] Identity error: {e}")); Err(e) }
             }
         }
     };
 
     match result {
         Ok(()) => push_log(&logs, "[GUI] Tunnel closed."),
-        Err(e) => push_log(&logs, &format!("[GUI] Tunnel error: {e}")),
+        Err(e) => push_log(&logs, &format!("[GUI] Error: {e}")),
     }
 }

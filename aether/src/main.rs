@@ -8,12 +8,14 @@ mod error;
 mod gui;
 mod masque;
 mod masque_h2;
+mod mixed_proxy;
 mod netstack;
 mod noize;
 mod preset;
 mod prober;
 mod quic;
 mod socks;
+mod system_proxy;
 mod tls;
 mod aethernoize;
 mod wireguard;
@@ -357,9 +359,20 @@ pub async fn run_masque_tunnel(
     });
 
     let socks_stack = stack.clone();
+    let use_mixed = cli.auth.is_some() || cli.allow_lan;
+    let proxy_auth = cli.auth.as_ref().map(|(u, p)| mixed_proxy::ProxyAuth {
+        username: u.clone(),
+        password: p.clone(),
+    });
     let socks_task = tokio::spawn(async move {
-        log::info!("[+] socks5 server listening on {listen}");
-        socks::serve(listen, socks_stack).await
+        if use_mixed {
+            let config = mixed_proxy::MixedProxyConfig { listen, auth: proxy_auth };
+            log::info!("[+] mixed proxy (HTTP+SOCKS5) listening on {listen}");
+            mixed_proxy::serve(config, socks_stack).await
+        } else {
+            log::info!("[+] socks5 server listening on {listen}");
+            socks::serve(listen, socks_stack).await
+        }
     });
 
     let tunnel_result = if masque_h2::enabled() {
@@ -595,9 +608,20 @@ async fn run_wireguard_tunnel(
     let stack = netstack::spawn(&identity.ipv4, &identity.ipv6, TUNNEL_MTU, inbound_rx, outbound_tx)?;
 
     let socks_stack = stack.clone();
+    let use_mixed = cli.auth.is_some() || cli.allow_lan;
+    let proxy_auth = cli.auth.as_ref().map(|(u, p)| mixed_proxy::ProxyAuth {
+        username: u.clone(),
+        password: p.clone(),
+    });
     let socks_task = tokio::spawn(async move {
-        log::info!("[+] socks5 server listening on {listen}");
-        socks::serve(listen, socks_stack).await
+        if use_mixed {
+            let config = mixed_proxy::MixedProxyConfig { listen, auth: proxy_auth };
+            log::info!("[+] mixed proxy (HTTP+SOCKS5) listening on {listen}");
+            mixed_proxy::serve(config, socks_stack).await
+        } else {
+            log::info!("[+] socks5 server listening on {listen}");
+            socks::serve(listen, socks_stack).await
+        }
     });
 
     let tunnel_result = tunnel.run(outbound_rx).await;

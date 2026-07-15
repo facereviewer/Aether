@@ -18,6 +18,11 @@ pub struct Preset {
     pub wg_no_profile_retry: bool,
     pub verbose: bool,
     pub tun_mode: bool,
+    pub allow_lan: bool,
+    pub auth_enabled: bool,
+    pub auth_user: String,
+    pub auth_pass: String,
+    pub system_proxy: bool,
 }
 
 impl Default for Preset {
@@ -37,6 +42,11 @@ impl Default for Preset {
             wg_no_profile_retry: false,
             verbose: false,
             tun_mode: false,
+            allow_lan: false,
+            auth_enabled: false,
+            auth_user: String::new(),
+            auth_pass: String::new(),
+            system_proxy: false,
         }
     }
 }
@@ -74,6 +84,11 @@ impl PresetStore {
                 wg_no_profile_retry: false,
                 verbose: false,
                 tun_mode: false,
+                allow_lan: false,
+                auth_enabled: false,
+                auth_user: String::new(),
+                auth_pass: String::new(),
+                system_proxy: false,
             },
             Preset {
                 name: "Fast WireGuard".to_string(),
@@ -90,6 +105,11 @@ impl PresetStore {
                 wg_no_profile_retry: false,
                 verbose: false,
                 tun_mode: false,
+                allow_lan: false,
+                auth_enabled: false,
+                auth_user: String::new(),
+                auth_pass: String::new(),
+                system_proxy: false,
             },
             Preset {
                 name: "Stealth MASQUE".to_string(),
@@ -106,6 +126,11 @@ impl PresetStore {
                 wg_no_profile_retry: false,
                 verbose: false,
                 tun_mode: false,
+                allow_lan: false,
+                auth_enabled: false,
+                auth_user: String::new(),
+                auth_pass: String::new(),
+                system_proxy: false,
             },
             Preset {
                 name: "WARP-in-WARP".to_string(),
@@ -122,6 +147,11 @@ impl PresetStore {
                 wg_no_profile_retry: false,
                 verbose: false,
                 tun_mode: false,
+                allow_lan: false,
+                auth_enabled: false,
+                auth_user: String::new(),
+                auth_pass: String::new(),
+                system_proxy: false,
             },
         ]
     }
@@ -174,14 +204,12 @@ impl PresetStore {
 }
 
 fn dirs() -> Option<PathBuf> {
-    // Try XDG_CONFIG_HOME first, then home dir
     if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
         return Some(PathBuf::from(xdg).join("aether"));
     }
     if let Ok(home) = std::env::var("HOME") {
         return Some(PathBuf::from(home).join(".config").join("aether"));
     }
-    // Windows
     if let Ok(appdata) = std::env::var("APPDATA") {
         return Some(PathBuf::from(appdata).join("aether"));
     }

@@ -15,6 +15,8 @@ pub struct Cli {
     pub verbose: bool,
     pub gui: bool,
     pub tun: bool,
+    pub allow_lan: bool,
+    pub auth: Option<(String, String)>,
 }
 
 impl Cli {
@@ -35,6 +37,8 @@ impl Cli {
             verbose: false,
             gui: false,
             tun: false,
+            allow_lan: false,
+            auth: None,
         };
 
         let mut i = 0;
@@ -44,57 +48,31 @@ impl Cli {
                     Self::print_help();
                     std::process::exit(0);
                 }
-                "-v" | "--verbose" => {
-                    cli.verbose = true;
-                }
-                "-b" | "--bind" => {
-                    i += 1;
-                    cli.bind = args.get(i).cloned();
-                }
-                "-m" | "--mode" => {
-                    i += 1;
-                    cli.mode = args.get(i).cloned();
-                }
-                "-s" | "--scan" => {
-                    i += 1;
-                    cli.scan = args.get(i).cloned();
-                }
-                "-c" | "--config" => {
-                    i += 1;
-                    cli.config = args.get(i).cloned();
-                }
-                "--ip" => {
-                    i += 1;
-                    cli.ip = args.get(i).cloned();
-                }
-                "--noize" => {
-                    i += 1;
-                    cli.noize = args.get(i).cloned();
-                }
-                "--aethernoize" => {
-                    i += 1;
-                    cli.aethernoize = args.get(i).cloned();
-                }
-                "--peer" => {
-                    i += 1;
-                    cli.peer = args.get(i).cloned();
-                }
-                "--ech" => {
-                    i += 1;
-                    cli.ech = args.get(i).cloned();
-                }
+                "-v" | "--verbose" => cli.verbose = true,
+                "-b" | "--bind" => { i += 1; cli.bind = args.get(i).cloned(); }
+                "-m" | "--mode" => { i += 1; cli.mode = args.get(i).cloned(); }
+                "-s" | "--scan" => { i += 1; cli.scan = args.get(i).cloned(); }
+                "-c" | "--config" => { i += 1; cli.config = args.get(i).cloned(); }
+                "--ip" => { i += 1; cli.ip = args.get(i).cloned(); }
+                "--noize" => { i += 1; cli.noize = args.get(i).cloned(); }
+                "--aethernoize" => { i += 1; cli.aethernoize = args.get(i).cloned(); }
+                "--peer" => { i += 1; cli.peer = args.get(i).cloned(); }
+                "--ech" => { i += 1; cli.ech = args.get(i).cloned(); }
                 "--wg-keepalive" => {
                     i += 1;
                     cli.wg_keepalive = args.get(i).and_then(|v| v.parse().ok());
                 }
-                "--wg-no-profile-retry" => {
-                    cli.wg_no_profile_retry = true;
-                }
-                "--gui" => {
-                    cli.gui = true;
-                }
-                "--tun" => {
-                    cli.tun = true;
+                "--wg-no-profile-retry" => cli.wg_no_profile_retry = true,
+                "--gui" => cli.gui = true,
+                "--tun" => cli.tun = true,
+                "--allow-lan" => cli.allow_lan = true,
+                "--auth" => {
+                    i += 1;
+                    if let Some(val) = args.get(i) {
+                        if let Some((u, p)) = val.split_once(':') {
+                            cli.auth = Some((u.to_string(), p.to_string()));
+                        }
+                    }
                 }
                 other => {
                     eprintln!("error: unknown flag '{other}'");
@@ -118,7 +96,7 @@ USAGE:
     aether [OPTIONS]
 
 OPTIONS:
-    -b, --bind <ADDR>           SOCKS5 listen address [default: 127.0.0.1:1819]
+    -b, --bind <ADDR>           Proxy listen address [default: 127.0.0.1:1819]
     -m, --mode <MODE>           Protocol: masq, wg, gool [default: masq]
     -s, --scan <MODE>           Scan mode: turbo, balanced, thorough, stealth [default: balanced]
     -c, --config <PATH>         Base config file path [default: aether.toml]
@@ -129,13 +107,15 @@ OPTIONS:
         --ech <MODE>            ECH: auto, or a base64 ECHConfigList [default: off]
         --wg-keepalive <SECS>   WireGuard persistent keepalive [default: 5]
         --wg-no-profile-retry   Don't retry with fallback aethernoize profiles
+        --allow-lan             Bind to 0.0.0.0 (accept connections from LAN)
+        --auth <USER:PASS>      Enable proxy authentication
+        --tun                   Use TUN device instead of proxy (requires root)
     -v, --verbose               Enable debug logging (RUST_LOG=debug)
         --gui                   Launch the GUI instead of CLI
-        --tun                   Use TUN device instead of SOCKS5 (requires root)
     -h, --help                  Print help
 
 ENVIRONMENT VARIABLES (flags take precedence):
-    AETHER_SOCKS           SOCKS5 listen address
+    AETHER_SOCKS           Proxy listen address
     AETHER_PROTOCOL        Protocol mode
     AETHER_SCAN            Scan mode
     AETHER_CONFIG          Base config path
@@ -153,6 +133,7 @@ EXAMPLES:
     aether --bind 0.0.0.0:9011 --mode masq --scan turbo
     aether -m wg -s thorough --peer 162.159.193.1:443
     aether --mode gool --verbose
+    aether --allow-lan --auth admin:secret     # LAN access with auth
 "#,
             version = env!("CARGO_PKG_VERSION")
         );
