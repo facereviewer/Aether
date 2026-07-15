@@ -73,26 +73,63 @@ target/release/aether
 
 ## Usage
 
-Run:
+### Interactive mode
+
+Run without arguments to get interactive prompts:
 
 ```bash
-./target/release/aether
+./aether
 ```
 
-Aether will ask you to select:
+### CLI flags
 
-- Protocol
-- Obfuscation profile
-- Listening port
-- Scan mode
+Skip prompts entirely by passing flags:
 
-After startup, a SOCKS5 proxy will be available at:
+```bash
+./aether --bind 0.0.0.0:9011 --mode masq --scan turbo
+```
+
+Priority chain: **CLI flags** > **environment variables** > **interactive prompts**.
+
+#### Available flags
+
+| Flag | Short | Description | Default |
+|------|-------|-------------|---------|
+| `--bind` | `-b` | SOCKS5 listen address | `127.0.0.1:1819` |
+| `--mode` | `-m` | Protocol: `masq`, `wg`, `gool` | `masq` |
+| `--scan` | `-s` | Scan mode: `turbo`, `balanced`, `thorough`, `stealth` | `balanced` |
+| `--config` | `-c` | Config file path | `aether.toml` |
+| `--ip` | | IP version: `v4`, `v6`, `both` | `v4` |
+| `--noize` | | MASQUE obfuscation: `off`, `gfw`, `firewall` | `firewall` |
+| `--aethernoize` | | WG obfuscation: `off`, `light`, `balanced`, `aggressive` | `balanced` |
+| `--peer` | | Force peer address (skips scan) | |
+| `--ech` | | ECH: `auto`, or base64 ECHConfigList | `off` |
+| `--wg-keepalive` | | WG persistent keepalive seconds | `5` |
+| `--wg-no-profile-retry` | | Don't retry with fallback obfuscation profiles | |
+| `--verbose` | `-v` | Debug logging | |
+| `--help` | `-h` | Print help | |
+
+#### Examples
+
+```bash
+# MASQUE with turbo scan on all interfaces
+./aether -m masq -s turbo -b 0.0.0.0:9011
+
+# WireGuard with thorough scan, forced peer
+./aether -m wg -s thorough --peer 162.159.193.1:443
+
+# gool (nested WireGuard) with verbose output
+./aether --mode gool --verbose
+
+# Force a specific config and ECH auto-detection
+./aether -c /etc/aether/prod.toml --ech auto
+```
+
+After startup, a SOCKS5 proxy is available at the bind address:
 
 ```
 127.0.0.1:1819
 ```
-
-Example:
 
 ```bash
 curl -x socks5h://127.0.0.1:1819 https://www.cloudflare.com/cdn-cgi/trace
