@@ -1,3 +1,0 @@
-[alias]
-# `cargo build` defaults to release
-build = "build --release"
