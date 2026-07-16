@@ -11,11 +11,20 @@ use crate::noize::NoizeConfig;
 use crate::quic;
 
 pub const MASQUE_CIDRS_V4: &[&str] = &[
+    "162.159.36.0/24",
+    "162.159.46.0/24",
     "162.159.192.0/24",
     "162.159.193.0/24",
     "162.159.195.0/24",
     "162.159.196.0/24",
+    "162.159.197.0/24",
     "162.159.198.0/24",
+    "162.159.204.0/24",
+    "172.65.251.0/24",
+    "188.114.96.0/24",
+    "188.114.97.0/24",
+    "188.114.98.0/24",
+    "188.114.99.0/24",
 ];
 
 pub const MASQUE_SEEDS: &[&str] = &[
@@ -27,9 +36,13 @@ pub const MASQUE_SEEDS: &[&str] = &[
     "162.159.196.1",
 ];
 
-pub const MASQUE_PORTS: &[u16] = &[443];
+pub const MASQUE_PORTS: &[u16] = &[443, 500, 1701, 4443, 8443, 8095];
 
-pub const MASQUE_CIDRS_V6: &[&str] = &["2606:4700:d0::/48", "2606:4700:d1::/48"];
+pub const MASQUE_CIDRS_V6: &[&str] = &[
+    "2606:4700:d0::/48",
+    "2606:4700:d1::/48",
+    "2606:4700:102::/48",
+];
 
 pub const MASQUE_SEEDS_V6: &[&str] = &["2606:4700:d0::a29f:c602", "2606:4700:d1::a29f:c602", "2606:4700:d0::a29f:c601", "2606:4700:d0::a29f:c001"];
 
@@ -168,6 +181,7 @@ pub struct MasqueProbe {
     pub noize: NoizeConfig,
     pub ports: Vec<u16>,
     pub ip: IpScan,
+    pub local_ipv4: Ipv4Addr,
 }
 
 pub async fn host_has_ipv6() -> bool {
@@ -300,6 +314,7 @@ async fn verify_one(
             path: probe.path.clone(),
             cert_pem: probe.cert_pem.to_vec(),
             key_pem: probe.key_pem.to_vec(),
+            local_ipv4: probe.local_ipv4,
         };
         return match crate::masque_h2::verify_h2(&cfg, timeout).await {
             Ok(rtt) => Some(ProbeResult { ip, port, rtt }),
@@ -320,6 +335,7 @@ async fn verify_one(
         ech_config_list: probe.ech_config_list.as_ref().map(|a| a.to_vec()),
         noize: probe.noize.clone(),
         timeout,
+        local_ipv4: probe.local_ipv4,
     };
 
     match quic::verify_masque(&vp).await {

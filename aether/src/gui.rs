@@ -5,7 +5,7 @@ use eframe::egui;
 
 use crate::preset::{Preset, PresetStore};
 
-pub fn run(_cli: crate::cli::Cli) {
+pub fn run() {
     let icon_bytes = include_bytes!("icon.png");
     let icon = eframe::icon_data::from_png_bytes(icon_bytes)
         .ok()
@@ -465,25 +465,26 @@ async fn run_tunnel_from_preset(
         Err(e) => { push_log(&logs, &format!("[GUI] Bad bind: {e}")); return; }
     };
 
-    let cli_args = crate::cli::Cli {
-        bind: Some(preset.bind.clone()),
-        mode: Some(preset.protocol.clone()),
-        scan: Some(preset.scan_mode.clone()),
-        config: Some(preset.config_path.clone()),
-        ip: Some(preset.ip_version.clone()),
-        noize: Some(preset.masque_obfuscation.clone()),
-        aethernoize: Some(preset.wg_obfuscation.clone()),
-        peer: if preset.peer.is_empty() { None } else { Some(preset.peer.clone()) },
-        ech: Some(preset.ech.clone()),
-        wg_keepalive: Some(preset.wg_keepalive),
-        wg_no_profile_retry: preset.wg_no_profile_retry,
-        verbose: preset.verbose,
-        gui: false,
-        cli: false,
-        tun: preset.tun_mode,
-        allow_lan: preset.allow_lan,
-        auth: if preset.auth_enabled { Some((preset.auth_user.clone(), preset.auth_pass.clone())) } else { None },
-    };
+    // Set env vars from preset (upstream uses env vars)
+    std::env::set_var("AETHER_SOCKS", &preset.bind);
+    std::env::set_var("AETHER_PROTOCOL", &preset.protocol);
+    std::env::set_var("AETHER_SCAN", &preset.scan_mode);
+    std::env::set_var("AETHER_IP", &preset.ip_version);
+    std::env::set_var("AETHER_NOIZE", &preset.masque_obfuscation);
+    std::env::set_var("AETHER_CONFIG", &preset.config_path);
+    if !preset.peer.is_empty() {
+        std::env::set_var("AETHER_PEER", &preset.peer);
+    }
+    if preset.ech != "off" {
+        std::env::set_var("AETHER_ECH", &preset.ech);
+    }
+    std::env::set_var("AETHER_WG_KEEPALIVE", &preset.wg_keepalive.to_string());
+    if preset.wg_no_profile_retry {
+        std::env::set_var("AETHER_WG_NO_PROFILE_RETRY", "1");
+    }
+    if preset.verbose {
+        std::env::set_var("RUST_LOG", "debug");
+    }
 
     let protocol = crate::Protocol::parse(&preset.protocol);
     push_log(&logs, &format!("[GUI] Protocol: {}", protocol.label()));
@@ -494,11 +495,11 @@ async fn run_tunnel_from_preset(
             match crate::load_or_provision_masque(&config_path).await {
                 Ok(identity) => {
                     push_log(&logs, &format!("[GUI] Identity: {}", identity.device_id));
-                    match crate::select_peer(&identity, protocol, &cli_args).await {
+                    match crate::select_peer(&identity, protocol).await {
                         Ok(peer) => {
                             push_log(&logs, &format!("[GUI] Peer: {peer}"));
-                            let ech = crate::resolve_ech(&cli_args).await;
-                            crate::run_masque_tunnel(identity, peer, ech, listen, &cli_args).await
+                            let ech = crate::resolve_ech().await;
+                            crate::run_masque_tunnel(&identity, peer, ech, listen).await
                         }
                         Err(e) => { push_log(&logs, &format!("[GUI] Peer error: {e}")); Err(e) }
                     }
@@ -508,10 +509,11 @@ async fn run_tunnel_from_preset(
         }
         crate::Protocol::WireGuard => {
             let config_path = crate::warp_config_path(&preset.config_path);
+            let lastconn = crate::lastconn_path(&config_path);
             match crate::load_or_provision_warp(&config_path).await {
                 Ok(identity) => {
                     push_log(&logs, &format!("[GUI] Identity: {}", identity.device_id));
-                    crate::run_wireguard(identity, listen, &cli_args).await
+                    crate::run_wireguard(identity, listen, lastconn).await
                 }
                 Err(e) => { push_log(&logs, &format!("[GUI] Identity error: {e}")); Err(e) }
             }
@@ -525,10 +527,10 @@ async fn run_tunnel_from_preset(
             ) {
                 (Ok(primary), Ok(secondary)) => {
                     push_log(&logs, &format!("[GUI] Outer: {} Inner: {}", primary.device_id, secondary.device_id));
-                    match crate::select_peer(&primary, crate::Protocol::WireGuard, &cli_args).await {
+                    match crate::select_peer(&primary, crate::Protocol::WireGuard).await {
                         Ok(peer) => {
                             push_log(&logs, &format!("[GUI] Peer: {peer}"));
-                            crate::run_warp_in_warp(primary, secondary, peer, listen, &cli_args).await
+                            crate::run_warp_in_warp(primary, secondary, peer, listen).await
                         }
                         Err(e) => { push_log(&logs, &format!("[GUI] Peer error: {e}")); Err(e) }
                     }

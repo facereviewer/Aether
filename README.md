@@ -11,13 +11,19 @@ Unlike traditional VPN clients, Aether is built for environments where Deep Pack
 
 ## Features
 
-- Automatic endpoint discovery
-- MASQUE (HTTP/3 & HTTP/2)
+- Automatic endpoint discovery, with end-to-end data-plane validation so a gateway is only trusted once it actually passes traffic, not just once it answers the handshake
+- MASQUE (HTTP/3 & HTTP/2), with optional TLS ClientHello fragmentation on HTTP/2
 - WireGuard support
 - Nested WireGuard mode (`gool`)
 - Traffic obfuscation
-- Automatic reconnection
+- Automatic reconnection, and quick-reconnect to your last known-good gateway to skip rescanning
 - Local SOCKS5 proxy
+- **Mixed proxy** (HTTP CONNECT + SOCKS5 on same port)
+- **Proxy authentication** (username/password)
+- **System proxy** integration (Linux/macOS/Windows)
+- **GUI** with preset management
+- **TUN mode** for system-wide routing
+- Command-line flags, environment variables, or interactive prompts — your choice
 - Linux, Windows, macOS and Android (Termux)
 
 ## Download
@@ -71,82 +77,93 @@ Binary:
 target/release/aether
 ```
 
-## Usage
+## GUI
 
-### Interactive mode
-
-Run without arguments to get interactive prompts:
+Launch the graphical interface by running the binary with no arguments, or with `--gui`:
 
 ```bash
-./aether
-```
-
-### GUI mode
-
-Launch the graphical interface with the `--gui` flag:
-
-```bash
-./aether --gui
+./aether          # launches GUI by default
+./aether --gui    # explicit GUI launch
 ```
 
 The GUI provides:
-- All configuration options in an organized, intuitive interface
-- **SOCKS5** or **TUN** output mode (system-wide routing)
+- All configuration options in an organized interface
 - Built-in presets (Default MASQUE, Fast WireGuard, Stealth MASQUE, WARP-in-WARP)
 - Custom preset management (create, save, delete)
-- Real-time connection status and log display
-- One-click connect/disconnect
+- Mixed proxy (HTTP+SOCKS5) with authentication
+- System proxy toggle
+- TUN mode for system-wide routing
+- Real-time connection status and logs
+
+To use the interactive CLI instead:
 
 ```bash
-./aether --bind 0.0.0.0:9011 --mode masq --scan turbo
+./aether --cli
 ```
 
-Priority chain: **CLI flags** > **environment variables** > **interactive prompts**.
+## Docker
 
-#### Available flags
+You can run Aether in an isolated environment using Docker. The official image is available on GitHub Container Registry (GHCR).
 
-| Flag | Short | Description | Default |
-|------|-------|-------------|---------|
-| `--bind` | `-b` | SOCKS5 listen address | `127.0.0.1:1819` |
-| `--mode` | `-m` | Protocol: `masq`, `wg`, `gool` | `masq` |
-| `--scan` | `-s` | Scan mode: `turbo`, `balanced`, `thorough`, `stealth` | `balanced` |
-| `--config` | `-c` | Config file path | `aether.toml` |
-| `--ip` | | IP version: `v4`, `v6`, `both` | `v4` |
-| `--noize` | | MASQUE obfuscation: `off`, `gfw`, `firewall` | `firewall` |
-| `--aethernoize` | | WG obfuscation: `off`, `light`, `balanced`, `aggressive` | `balanced` |
-| `--peer` | | Force peer address (skips scan) | |
-| `--ech` | | ECH: `auto`, or base64 ECHConfigList | `off` |
-| `--wg-keepalive` | | WG persistent keepalive seconds | `5` |
-| `--wg-no-profile-retry` | | Don't retry with fallback obfuscation profiles | |
-| `--verbose` | `-v` | Debug logging | |
-| `--gui` | | Launch the graphical interface | |
-| `--tun` | | Use TUN device instead of SOCKS5 (requires root) | |
-| `--help` | `-h` | Print help | |
-
-#### Examples
+Pull and run the pre-built image (interactive mode is required for initial setup):
 
 ```bash
-# MASQUE with turbo scan on all interfaces
-./aether -m masq -s turbo -b 0.0.0.0:9011
-
-# WireGuard with thorough scan, forced peer
-./aether -m wg -s thorough --peer 162.159.193.1:443
-
-# gool (nested WireGuard) with verbose output
-./aether --mode gool --verbose
-
-# Force a specific config and ECH auto-detection
-./aether -c /etc/aether/prod.toml --ech auto
-
-# TUN mode (system-wide routing, requires root)
-sudo ./aether --tun --mode masq --scan turbo
+docker run -it -p 1819:1819 ghcr.io/cluvexstudio/aether:latest
 ```
 
-After startup, a SOCKS5 proxy is available at the bind address:
+You can also bypass prompts by providing environment variables:
+
+```bash
+docker run -it -p 1819:1819 \
+  -e AETHER_PROTOCOL=masque \
+  -e AETHER_SCAN=balanced \
+  ghcr.io/cluvexstudio/aether:latest
+```
+
+If you prefer to build the image manually from source:
+
+```bash
+docker build -t aether .
+docker run -it -p 1819:1819 aether
+```
+
+## Usage
+
+Run with no arguments and answer the prompts:
+
+```bash
+./target/release/aether
+```
+
+Or skip the prompts with flags:
+
+```bash
+./target/release/aether --masque -4 --scan turbo --noize firewall
+```
+
+With authentication and LAN access:
+
+```bash
+./target/release/aether --allow-lan --auth admin:secret
+```
+
+TUN mode (system-wide routing, requires root):
+
+```bash
+sudo ./target/release/aether --tun --masque --scan turbo
+```
+
+On Windows, double-click `run-aether.bat` (included in the release zip) instead — it opens a terminal, runs `aether.exe`, and keeps the window open afterwards so you can read any errors.
+
+Every prompt has a flag and an environment variable equivalent. Run `./target/release/aether --help` for the full list, or see the guides linked below.
+
+After startup, a SOCKS5 proxy will be available at:
 
 ```
 127.0.0.1:1819
 ```
+
+Example:
 
 ```bash
 curl -x socks5h://127.0.0.1:1819 https://www.cloudflare.com/cdn-cgi/trace
@@ -185,6 +202,14 @@ MASQUE support is built on top of Cloudflare's **Quiche** library.
 > **Experienced network developers and protocol engineers are welcome to contribute.**
 
 > **Please keep the codebase clean, maintainable, and well-engineered. Low-quality or vibe-coded contributions will not be accepted.**
+
+## Donate
+
+If Aether has been useful to you, consider supporting its development:
+
+- **TRX (Tron):** `TRxVSHcoADZnBfztFmFb2TQopusAwWYEVR`
+- **BTC:** `bc1qnjnvzsa5avgj7n0uy383cv5zdxfjnvvp257egm`
+- **TON:** `UQAH75bXaaRUhZMwiF0ZujOXFDDmvLSPASKoOsWF0HNasiaM`
 
 ## License
 

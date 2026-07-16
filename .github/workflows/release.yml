@@ -14,7 +14,10 @@ jobs:
   # macOS + Windows desktop targets, always on the latest runners.
   # macOS uses macos-latest (Apple Silicon); the Intel/x86_64 binary
   # is cross-compiled from that same runner.
-  # Windows uses windows-latest for both x86_64 and arm64.
+  # Windows uses windows-latest for x86_64. The arm64 MSVC target is not
+  # built: boringtun pulls in ring 0.16.20, whose C build fails on
+  # aarch64-pc-windows-msvc (BN_ULLONG undeclared in the bn/internal.h
+  # fallback path), and few users run arm64 Windows anyway.
   # ------------------------------------------------------------------
   desktop:
     name: Build ${{ matrix.archive }} 
@@ -32,9 +35,6 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             archive: aether-windows-x86_64.zip
-          - os: windows-latest
-            target: aarch64-pc-windows-msvc
-            archive: aether-windows-arm64.zip
     defaults:
       run:
         working-directory: aether
@@ -71,7 +71,7 @@ jobs:
       - name: Package archive (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: Compress-Archive -Path target/${{ matrix.target }}/release/aether.exe -DestinationPath ${{ matrix.archive }} 
+        run: Compress-Archive -Path target/${{ matrix.target }}/release/aether.exe,run-aether.bat -DestinationPath ${{ matrix.archive }} 
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -301,14 +301,14 @@ jobs:
           fail_on_unmatched_files: false
           files: dist/**/*
           body: |
-            Aether v1.0.1
+            Aether v1.2.0
 
             Aether is a user-space proxy client. It tunnels traffic out of a filtered network and exposes a local SOCKS5 proxy on 127.0.0.1:1819. Point a browser, terminal, or system proxy at that address and your traffic leaves through the tunnel.
 
-            What's new in v1.0.1:
+            What's new in v1.2.0:
 
-            - Default SOCKS5 proxy port changed from 10808 to 1819 (AETHER_SOCKS env var still overrides it).
-            - Added aether.sh, a one-command Termux installer/updater that auto-detects device architecture, downloads the matching release, verifies its SHA-256 checksum, and installs the binary into $PREFIX/bin.
+            - Fixed a false-positive in the data-plane check for MASQUE and WireGuard. The probe packet used to be sent to 1.1.1.1, which is inside Cloudflare's own network, so a gateway could pass just by routing internally without ever reaching the real internet. It now targets an external resolver, and needs two successful round-trips in a row instead of one. This was the cause behind reports of a tunnel showing as "connected" while actual traffic just hung.
+            - MASQUE now lets you pick HTTP/3 (QUIC) or HTTP/2 (TCP) up front, with a short note on when each helps: HTTP/3 for the fastest handshake on healthy networks, HTTP/2 for networks that block or throttle UDP.
 
             This release includes prebuilt binaries for:
 
@@ -318,7 +318,6 @@ jobs:
             - macOS arm64 / Apple Silicon (aether-macos-arm64.tar.gz)
             - macOS x86_64 / Intel (aether-macos-x86_64.tar.gz)
             - Windows x86_64 (aether-windows-x86_64.zip)
-            - Windows arm64 (aether-windows-arm64.zip)
             - Android / Termux arm64 (aether-android-arm64.tar.gz)
             - Android / Termux armv7 (aether-android-armv7.tar.gz)
             - Android / Termux x86_64 (aether-android-x86_64.tar.gz)
@@ -328,6 +327,11 @@ jobs:
             Quick start (Termux, one-line install):
 
                curl -fsSL https://raw.githubusercontent.com/CluvexStudio/aether/main/aether.sh -o aether.sh && chmod +x aether.sh && ./aether.sh install
+
+            Quick start (Windows):
+
+            1. Download aether-windows-x86_64.zip and extract it.
+            2. Double-click run-aether.bat. It opens a terminal, runs aether.exe, and stays open afterwards so you can read any errors.
 
             Quick start (other platforms):
 
@@ -340,3 +344,49 @@ jobs:
                sha256sum -c aether-linux-x86_64.tar.gz.sha256
 
             See README.md and the Docs directory for transport selection, obfuscation profiles, the HTTP/2 vs HTTP/3 choice in MASQUE, and the full environment-variable reference.
+
+  # ------------------------------------------------------------------
+  # Build and push the Docker image to GitHub Container Registry (GHCR)
+  # ------------------------------------------------------------------
+  docker:
+    name: Build and push Docker image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Docker requires repository names to be strictly lowercase.
+      # Since CluvexStudio contains uppercase, we lowercase it here.
+      - name: Downcase repository name
+        run: |
+          echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}" >> ${GITHUB_ENV}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=tag
+            type=raw,value=latest
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
